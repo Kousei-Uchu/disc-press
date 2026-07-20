@@ -5,756 +5,771 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
 
 (async () => {
 
-/* ---------------- utility ---------------- */
-const $ = (s) => document.querySelector(s);
-const logEl = $("#log"), progWrap = $("#progressWrap"), progBar = $("#progressBar");
-function log(msg, cls){ const d=document.createElement("div"); if(cls) d.className=cls; d.textContent=msg; logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight; }
-function setProgress(pct){ progBar.style.width = Math.max(0,Math.min(100,pct))+"%"; }
-function slugify(str){
-  return (str||"track").toString().toLowerCase()
-    .normalize("NFKD").replace(/[\u0300-\u036f]/g,"")
-    .replace(/\.[a-z0-9]+$/i,"")
-    .replace(/[^a-z0-9]+/g,"_")
-    .replace(/^_+|_+$/g,"")
-    .slice(0,48) || "track";
-}
-function uniqueId(base, existing){
-  let id = base, n = 2;
-  while(existing.has(id)){ id = base+"_"+n; n++; }
-  existing.add(id);
-  return id;
-}
-function escapeJson(str){ return JSON.stringify(str).slice(1,-1); }
-
-/* ---------------- color math ---------------- */
-function relLuminance(r,g,b){
-  return (0.2126*r + 0.7152*g + 0.0722*b) / 255;
-}
-function rgbToHsl(r,g,b){
-  r/=255; g/=255; b/=255;
-  const max=Math.max(r,g,b), min=Math.min(r,g,b);
-  let h=0,s=0; const l=(max+min)/2;
-  const d=max-min;
-  if(d!==0){
-    s = d/(1-Math.abs(2*l-1));
-    switch(max){
-      case r: h = 60*(((g-b)/d)%6); break;
-      case g: h = 60*(((b-r)/d)+2); break;
-      case b: h = 60*(((r-g)/d)+4); break;
+    /* ---------------- utility ---------------- */
+    const $ = (s) => document.querySelector(s);
+    const logEl = $("#log"), progWrap = $("#progressWrap"), progBar = $("#progressBar");
+    function log(msg, cls) { const d = document.createElement("div"); if (cls) d.className = cls; d.textContent = msg; logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight; }
+    function setProgress(pct) { progBar.style.width = Math.max(0, Math.min(100, pct)) + "%"; }
+    function slugify(str) {
+        return (str || "track").toString().toLowerCase()
+            .normalize("NFKD").replace(/[\u0300-\u036f]/g, "")
+            .replace(/\.[a-z0-9]+$/i, "")
+            .replace(/[^a-z0-9]+/g, "_")
+            .replace(/^_+|_+$/g, "")
+            .slice(0, 48) || "track";
     }
-  }
-  if(h<0) h+=360;
-  return [h,s,l];
-}
-function hslToRgb(h,s,l){
-  const c=(1-Math.abs(2*l-1))*s;
-  const x=c*(1-Math.abs((h/60)%2-1));
-  const m=l-c/2;
-  let r=0,g=0,b=0;
-  if(h<60){r=c;g=x;b=0} else if(h<120){r=x;g=c;b=0}
-  else if(h<180){r=0;g=c;b=x} else if(h<240){r=0;g=x;b=c}
-  else if(h<300){r=x;g=0;b=c} else {r=c;g=0;b=x}
-  return [Math.round((r+m)*255), Math.round((g+m)*255), Math.round((b+m)*255)];
-}
-function colorDist(c1,c2){
-  const dr=c1[0]-c2[0], dg=c1[1]-c2[1], db=c1[2]-c2[2];
-  return Math.sqrt(dr*dr+dg*dg+db*db);
-}
-function hueDist(a,b){
-  const d = Math.abs(a-b)%360;
-  return d>180 ? 360-d : d;
-}
-function toHex(r,g,b){ return "#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join(""); }
-
-/* Extract two perceptually distinct colors from cover-art image data.
-   Approach: build a weighted color histogram (coarse RGB buckets so near-identical
-   pixels merge), seed two cluster centers as the heaviest bucket and the bucket
-   farthest from it among the heaviest candidates, then refine both centers with
-   a few passes of weighted k-means over the histogram (cheap — bins, not pixels).
-   This is far more stable than sorting by hue, since hue is undefined/noisy for
-   low-saturation pixels and was the main source of erratic picks before. */
-function extractTwoColors(imgData){
-  const data = imgData.data;
-  const hist = new Map();
-  let totalWeight = 0, blackWeight = 0, whiteWeight = 0;
-
-  for(let i=0;i<data.length;i+=4*2){ // sample every 2nd pixel
-    const r=data[i], g=data[i+1], b=data[i+2], a=data[i+3];
-    if(a<64) continue;
-    const [,s,l] = rgbToHsl(r,g,b);
-    const weight = 0.4 + 0.6*s; // mildly favor saturated pixels without ignoring muted art
-    totalWeight += weight;
-    if(l < 0.08) blackWeight += weight;
-    else if(l > 0.94 && s < 0.10) whiteWeight += weight;
-
-    const key = ((r>>4)<<8) | ((g>>4)<<4) | (b>>4); // 4 bits/channel = 4096 buckets
-    let bucket = hist.get(key);
-    if(!bucket){ bucket = {r:0,g:0,b:0,w:0}; hist.set(key,bucket); }
-    bucket.r += r*weight; bucket.g += g*weight; bucket.b += b*weight; bucket.w += weight;
-  }
-
-  if(hist.size===0 || totalWeight===0){
-    return {main:{r:194,g:84,b:44}, ring:{r:56,g:74,b:120}};
-  }
-
-  const bins = [...hist.values()]
-    .map(b => ({r:b.r/b.w, g:b.g/b.w, b:b.b/b.w, w:b.w}))
-    .sort((a,b) => b.w - a.w);
-
-  const dist3 = (a,b) => Math.sqrt((a.r-b.r)**2 + (a.g-b.g)**2 + (a.b-b.b)**2);
-
-  let center1 = {r:bins[0].r, g:bins[0].g, b:bins[0].b};
-  let center2 = null, bestDist = -1;
-  const pool = bins.slice(0, Math.min(50, bins.length));
-  for(const bin of pool){
-    const d = dist3(bin, center1);
-    if(d > bestDist){ bestDist = d; center2 = {r:bin.r, g:bin.g, b:bin.b}; }
-  }
-  if(!center2) center2 = {r:255-center1.r, g:255-center1.g, b:255-center1.b};
-
-  for(let pass=0; pass<4; pass++){
-    let s1={r:0,g:0,b:0,w:0}, s2={r:0,g:0,b:0,w:0};
-    for(const bin of bins){
-      const d1 = dist3(bin, center1), d2 = dist3(bin, center2);
-      const t = d1 <= d2 ? s1 : s2;
-      t.r += bin.r*bin.w; t.g += bin.g*bin.w; t.b += bin.b*bin.w; t.w += bin.w;
+    function uniqueId(base, existing) {
+        let id = base, n = 2;
+        while (existing.has(id)) { id = base + "_" + n; n++; }
+        existing.add(id);
+        return id;
     }
-    if(s1.w > 0) center1 = {r:s1.r/s1.w, g:s1.g/s1.w, b:s1.b/s1.w};
-    if(s2.w > 0) center2 = {r:s2.r/s2.w, g:s2.g/s2.w, b:s2.b/s2.w};
-  }
+    function escapeJson(str) { return JSON.stringify(str).slice(1, -1); }
 
-  let w1=0, w2=0;
-  for(const bin of bins){
-    if(dist3(bin,center1) <= dist3(bin,center2)) w1 += bin.w; else w2 += bin.w;
-  }
-  let mainColor = w1 >= w2 ? center1 : center2;
-  let ringColor = w1 >= w2 ? center2 : center1;
-
-  // Guard against near-black / near-white unless they truly dominate the art
-  const dominantAchromatic = (blackWeight+whiteWeight) / totalWeight > 0.55;
-  function fixAchromatic(c){
-    const [h,s,l] = rgbToHsl(c.r,c.g,c.b);
-    if((s < 0.12 || l < 0.08 || l > 0.94) && !dominantAchromatic){
-      const hue = isFinite(h) ? h : 30;
-      const [r,g,b] = hslToRgb(hue, 0.55, Math.min(Math.max(l,0.32),0.62));
-      return {r,g,b};
+    /* ---------------- color math ---------------- */
+    function relLuminance(r, g, b) {
+        return (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255;
     }
-    return c;
-  }
-  mainColor = fixAchromatic(mainColor);
-  ringColor = fixAchromatic(ringColor);
-
-  // Enforce a real minimum separation so the two colors never land near-identical
-  if(dist3(mainColor, ringColor) < 70){
-    const [mh,ms,ml] = rgbToHsl(mainColor.r, mainColor.g, mainColor.b);
-    const altHue = (mh + 150) % 360;
-    const [r,g,b] = hslToRgb(altHue, Math.max(ms,0.5), ml>0.5 ? ml-0.22 : ml+0.22);
-    ringColor = {r,g,b};
-  }
-
-  return {
-    main: {r:Math.round(mainColor.r), g:Math.round(mainColor.g), b:Math.round(mainColor.b)},
-    ring: {r:Math.round(ringColor.r), g:Math.round(ringColor.g), b:Math.round(ringColor.b)}
-  };
-}
-
-/* ---------------- disc template reader ---------------- */
-let TEMPLATE = null; // {w,h,group:[],lumDelta:[],alpha:[]}
-const REF_RED = [255,0,0];
-const REF_YELLOW = [255,255,0];
-
-function loadTemplate(){
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const c = document.createElement("canvas");
-      c.width = img.width; c.height = img.height;
-      const ctx = c.getContext("2d");
-      ctx.drawImage(img,0,0);
-      const data = ctx.getImageData(0,0,c.width,c.height);
-      const n = c.width*c.height;
-      const group = new Uint8Array(n);
-      const lumDelta = new Float32Array(n);
-      const alpha = new Uint8Array(n);
-      const lumRed = relLuminance(...REF_RED);
-      const lumYellow = relLuminance(...REF_YELLOW);
-      for(let p=0;p<n;p++){
-        const i = p*4;
-        const r=data.data[i], g=data.data[i+1], b=data.data[i+2], a=data.data[i+3];
-        const dRed = colorDist([r,g,b], REF_RED);
-        const dYellow = colorDist([r,g,b], REF_YELLOW);
-        const g0 = dRed <= dYellow ? 0 : 1;
-        group[p] = g0;
-        const lum = relLuminance(r,g,b);
-        lumDelta[p] = lum - (g0===0 ? lumRed : lumYellow);
-        alpha[p] = a;
-      }
-
-      const debug = document.createElement("canvas");
-debug.width = c.width;
-debug.height = c.height;
-
-const dctx = debug.getContext("2d");
-const img = dctx.createImageData(c.width, c.height);
-
-for (let p = 0; p < n; p++) {
-    const i = p * 4;
-    const v = group[p] ? 255 : 0;
-    img.data[i] = v;
-    img.data[i + 1] = v;
-    img.data[i + 2] = v;
-    img.data[i + 3] = 255;
-}
-
-dctx.putImageData(img, 0, 0);
-document.body.appendChild(debug);
-
-
-      TEMPLATE = {w:c.width, h:c.height, group, lumDelta, alpha};
-      log("Loaded disc_template.png ("+c.width+"×"+c.height+") — pixel arrays built.", "ok");
-      resolve(true);
-    };
-    img.onerror = () => {
-      log("Could not load ./disc_template.png — place it next to this HTML file. Using a generated placeholder ring instead.", "err");
-      // synth a minimal placeholder template: filled disc (red) with a ring band (yellow), circular alpha mask
-      const w=16,h=16;
-      const group = new Uint8Array(w*h), lumDelta = new Float32Array(w*h), alpha = new Uint8Array(w*h);
-      const cx=7.5, cy=7.5, R=7.5;
-      for(let y=0;y<h;y++) for(let x=0;x<w;x++){
-        const p=y*w+x;
-        const d = Math.sqrt((x-cx)**2+(y-cy)**2);
-        alpha[p] = d<=R ? 255 : 0;
-        const ring = d>2.3 && d<3.4;
-        group[p] = ring ? 1 : 0;
-        lumDelta[p] = ((x+y)%3===0) ? 0.06 : ((x*y)%7===0 ? -0.08 : 0);
-      }
-      TEMPLATE = {w,h,group,lumDelta,alpha};
-      resolve(false);
-    };
-    img.src = "./disc_template.png";
-  });
-}
-
-function buildTexture(mainColor, ringColor){
-  const {w,h,group,lumDelta,alpha} = TEMPLATE;
-  const canvas = document.createElement("canvas");
-  canvas.width = w; canvas.height = h;
-  const ctx = canvas.getContext("2d");
-  const out = ctx.createImageData(w,h);
-  const mainHsl = rgbToHsl(mainColor.r,mainColor.g,mainColor.b);
-  const ringHsl = rgbToHsl(ringColor.r,ringColor.g,ringColor.b);
-  for(let p=0;p<w*h;p++){
-    const useRing = group[p]===1;
-    const [bh,bs,bl] = useRing ? ringHsl : mainHsl;
-    const newL = Math.min(1,Math.max(0, bl + lumDelta[p]));
-    const [r,g,b] = hslToRgb(bh,bs,newL);
-    const i=p*4;
-    out.data[i]=r; out.data[i+1]=g; out.data[i+2]=b; out.data[i+3]=alpha[p];
-  }
-  ctx.putImageData(out,0,0);
-  return canvas;
-}
-
-/* ---------------- metadata ---------------- */
-function readTags(file){
-  return new Promise((resolve) => {
-    if(typeof jsmediatags === "undefined"){ resolve({}); return; }
-    jsmediatags.read(file, {
-      onSuccess: (tag) => resolve(tag.tags || {}),
-      onError: () => resolve({})
-    });
-  });
-}
-
-/* ---------------- state ---------------- */
-const tracks = []; // {id, file, title, artist, cover(dataURL|null), colors, canvas, oggBlob, duration, status}
-const usedIds = new Set();
-
-const tracksEl = $("#tracks"), emptyMsg = $("#emptyMsg"), genBtn = $("#generateBtn"), genHint = $("#genHint");
-
-function refreshEmpty(){
-  emptyMsg.style.display = tracks.length ? "none" : "block";
-  genBtn.disabled = tracks.length === 0;
-  genHint.textContent = tracks.length ? tracks.length+" track(s) ready." : "Add at least one track to enable this.";
-}
-
-async function addFile(file){
-  let track;
-  try{
-    if(!TEMPLATE) await loadTemplate();
-    const id = uniqueId(slugify(file.name), usedIds);
-    track = { id, file, title: file.name.replace(/\.[a-z0-9]+$/i,""), artist:"Unknown Artist",
-      cover:null, colors:null, canvas:null, oggBlob:null, duration:180, status:"reading", error:null };
-    tracks.push(track);
-    renderTrack(track);
-    refreshEmpty();
-  }catch(err){
-    log("Could not add "+file.name+": "+err.message, "err");
-    console.error(err);
-    return;
-  }
-
-  try{
-    const tags = await readTags(file);
-    if(tags.title) track.title = tags.title;
-    if(tags.artist) track.artist = tags.artist;
-
-    let imgData = null;
-    if(tags.picture){
-      const {data, format} = tags.picture;
-      const bytes = new Uint8Array(data);
-      let bin = ""; for(let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
-      track.cover = `data:${format};base64,${btoa(bin)}`;
-      imgData = await coverToImageData(track.cover);
+    function rgbToHsl(r, g, b) {
+        r /= 255; g /= 255; b /= 255;
+        const max = Math.max(r, g, b), min = Math.min(r, g, b);
+        let h = 0, s = 0; const l = (max + min) / 2;
+        const d = max - min;
+        if (d !== 0) {
+            s = d / (1 - Math.abs(2 * l - 1));
+            switch (max) {
+                case r: h = 60 * (((g - b) / d) % 6); break;
+                case g: h = 60 * (((b - r) / d) + 2); break;
+                case b: h = 60 * (((r - g) / d) + 4); break;
+            }
+        }
+        if (h < 0) h += 360;
+        return [h, s, l];
     }
-    track.colors = imgData ? extractTwoColors(imgData) : extractTwoColors(fauxImageDataFromString(track.title+track.artist));
-    track.canvas = buildTexture(track.colors.main, track.colors.ring);
-    track.status = "ready";
-  }catch(err){
-    // Metadata/color/texture step failed — the track stays in the list with sane
-    // fallbacks so you can still fix title/artist/colors by hand and continue.
-    track.status = "error";
-    track.error = err.message;
-    track.colors = track.colors || extractTwoColors(fauxImageDataFromString(track.title+track.artist));
-    track.canvas = track.canvas || buildTexture(track.colors.main, track.colors.ring);
-    log("Problem reading "+file.name+": "+err.message+" (using fallback title/colors — edit by hand)", "err");
-    console.error(err);
-  }
-  renderTrack(track);
-}
+    function hslToRgb(h, s, l) {
+        const c = (1 - Math.abs(2 * l - 1)) * s;
+        const x = c * (1 - Math.abs((h / 60) % 2 - 1));
+        const m = l - c / 2;
+        let r = 0, g = 0, b = 0;
+        if (h < 60) { r = c; g = x; b = 0 } else if (h < 120) { r = x; g = c; b = 0 }
+        else if (h < 180) { r = 0; g = c; b = x } else if (h < 240) { r = 0; g = x; b = c }
+        else if (h < 300) { r = x; g = 0; b = c } else { r = c; g = 0; b = x }
+        return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
+    }
+    function colorDist(c1, c2) {
+        const dr = c1[0] - c2[0], dg = c1[1] - c2[1], db = c1[2] - c2[2];
+        return Math.sqrt(dr * dr + dg * dg + db * db);
+    }
+    function hueDist(a, b) {
+        const d = Math.abs(a - b) % 360;
+        return d > 180 ? 360 - d : d;
+    }
+    function toHex(r, g, b) { return "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join(""); }
 
-function fauxImageDataFromString(str){
-  // deterministic pseudo cover so tracks without embedded art still get distinct, stable colors
-  const c=document.createElement("canvas"); c.width=32; c.height=32;
-  const ctx=c.getContext("2d");
-  let hash=0; for(let i=0;i<str.length;i++){ hash = (hash*31 + str.charCodeAt(i)) >>> 0; }
-  const h1 = hash%360, h2=(hash>>8)%360;
-  const g = ctx.createLinearGradient(0,0,32,32);
-  g.addColorStop(0, `hsl(${h1},70%,45%)`);
-  g.addColorStop(1, `hsl(${(h2+150)%360},65%,40%)`);
-  ctx.fillStyle=g; ctx.fillRect(0,0,32,32);
-  return ctx.getImageData(0,0,32,32);
-}
+    /* Extract two perceptually distinct colors from cover-art image data.
+       Approach: build a weighted color histogram (coarse RGB buckets so near-identical
+       pixels merge), seed two cluster centers as the heaviest bucket and the bucket
+       farthest from it among the heaviest candidates, then refine both centers with
+       a few passes of weighted k-means over the histogram (cheap — bins, not pixels).
+       This is far more stable than sorting by hue, since hue is undefined/noisy for
+       low-saturation pixels and was the main source of erratic picks before. */
+    function extractTwoColors(imgData) {
+        const data = imgData.data;
+        const hist = new Map();
+        let totalWeight = 0, blackWeight = 0, whiteWeight = 0;
 
-function coverToImageData(dataUrl){
-  return new Promise((resolve) => {
-    const img = new Image();
-    img.onload = () => {
-      const c = document.createElement("canvas");
-      const s = 64;
-      c.width=s; c.height=s;
-      const ctx = c.getContext("2d");
-      ctx.drawImage(img,0,0,s,s);
-      resolve(ctx.getImageData(0,0,s,s));
-    };
-    img.onerror = () => resolve(null);
-    img.src = dataUrl;
-  });
-}
+        for (let i = 0; i < data.length; i += 4 * 2) { // sample every 2nd pixel
+            const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+            if (a < 64) continue;
+            const [, s, l] = rgbToHsl(r, g, b);
+            const weight = 0.4 + 0.6 * s; // mildly favor saturated pixels without ignoring muted art
+            totalWeight += weight;
+            if (l < 0.08) blackWeight += weight;
+            else if (l > 0.94 && s < 0.10) whiteWeight += weight;
 
-function renderTrack(t){
-  let el = document.getElementById("track-"+t.id);
-  if(!el){
-    el = document.createElement("div");
-    el.className = "track";
-    el.id = "track-"+t.id;
-    tracksEl.appendChild(el);
-  }
-  const previewCanvas = t.canvas ? t.canvas.toDataURL() : null;
-  el.innerHTML = `
+            const key = ((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4); // 4 bits/channel = 4096 buckets
+            let bucket = hist.get(key);
+            if (!bucket) { bucket = { r: 0, g: 0, b: 0, w: 0 }; hist.set(key, bucket); }
+            bucket.r += r * weight; bucket.g += g * weight; bucket.b += b * weight; bucket.w += weight;
+        }
+
+        if (hist.size === 0 || totalWeight === 0) {
+            return { main: { r: 194, g: 84, b: 44 }, ring: { r: 56, g: 74, b: 120 } };
+        }
+
+        const bins = [...hist.values()]
+            .map(b => ({ r: b.r / b.w, g: b.g / b.w, b: b.b / b.w, w: b.w }))
+            .sort((a, b) => b.w - a.w);
+
+        const dist3 = (a, b) => Math.sqrt((a.r - b.r) ** 2 + (a.g - b.g) ** 2 + (a.b - b.b) ** 2);
+
+        let center1 = { r: bins[0].r, g: bins[0].g, b: bins[0].b };
+        let center2 = null, bestDist = -1;
+        const pool = bins.slice(0, Math.min(50, bins.length));
+        for (const bin of pool) {
+            const d = dist3(bin, center1);
+            if (d > bestDist) { bestDist = d; center2 = { r: bin.r, g: bin.g, b: bin.b }; }
+        }
+        if (!center2) center2 = { r: 255 - center1.r, g: 255 - center1.g, b: 255 - center1.b };
+
+        for (let pass = 0; pass < 4; pass++) {
+            let s1 = { r: 0, g: 0, b: 0, w: 0 }, s2 = { r: 0, g: 0, b: 0, w: 0 };
+            for (const bin of bins) {
+                const d1 = dist3(bin, center1), d2 = dist3(bin, center2);
+                const t = d1 <= d2 ? s1 : s2;
+                t.r += bin.r * bin.w; t.g += bin.g * bin.w; t.b += bin.b * bin.w; t.w += bin.w;
+            }
+            if (s1.w > 0) center1 = { r: s1.r / s1.w, g: s1.g / s1.w, b: s1.b / s1.w };
+            if (s2.w > 0) center2 = { r: s2.r / s2.w, g: s2.g / s2.w, b: s2.b / s2.w };
+        }
+
+        let w1 = 0, w2 = 0;
+        for (const bin of bins) {
+            if (dist3(bin, center1) <= dist3(bin, center2)) w1 += bin.w; else w2 += bin.w;
+        }
+        let mainColor = w1 >= w2 ? center1 : center2;
+        let ringColor = w1 >= w2 ? center2 : center1;
+
+        // Guard against near-black / near-white unless they truly dominate the art
+        const dominantAchromatic = (blackWeight + whiteWeight) / totalWeight > 0.55;
+        function fixAchromatic(c) {
+            const [h, s, l] = rgbToHsl(c.r, c.g, c.b);
+            if ((s < 0.12 || l < 0.08 || l > 0.94) && !dominantAchromatic) {
+                const hue = isFinite(h) ? h : 30;
+                const [r, g, b] = hslToRgb(hue, 0.55, Math.min(Math.max(l, 0.32), 0.62));
+                return { r, g, b };
+            }
+            return c;
+        }
+        mainColor = fixAchromatic(mainColor);
+        ringColor = fixAchromatic(ringColor);
+
+        // Enforce a real minimum separation so the two colors never land near-identical
+        if (dist3(mainColor, ringColor) < 70) {
+            const [mh, ms, ml] = rgbToHsl(mainColor.r, mainColor.g, mainColor.b);
+            const altHue = (mh + 150) % 360;
+            const [r, g, b] = hslToRgb(altHue, Math.max(ms, 0.5), ml > 0.5 ? ml - 0.22 : ml + 0.22);
+            ringColor = { r, g, b };
+        }
+
+        return {
+            main: { r: Math.round(mainColor.r), g: Math.round(mainColor.g), b: Math.round(mainColor.b) },
+            ring: { r: Math.round(ringColor.r), g: Math.round(ringColor.g), b: Math.round(ringColor.b) }
+        };
+    }
+
+    /* ---------------- disc template reader ---------------- */
+    let TEMPLATE = null; // {w,h,group:[],lumDelta:[],alpha:[]}
+    const REF_RED = [255, 0, 0];
+    const REF_YELLOW = [255, 255, 0];
+
+    function loadTemplate() {
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                const c = document.createElement("canvas");
+                c.width = img.width; c.height = img.height;
+                const ctx = c.getContext("2d");
+                ctx.drawImage(img, 0, 0);
+
+                // DEBUG: verify the template actually loaded
+                document.body.appendChild(c);
+
+                const data = ctx.getImageData(0, 0, c.width, c.height);
+                const n = c.width * c.height;
+                const group = new Uint8Array(n);
+                const lumDelta = new Float32Array(n);
+                const alpha = new Uint8Array(n);
+                const lumRed = relLuminance(...REF_RED);
+                const lumYellow = relLuminance(...REF_YELLOW);
+                for (let p = 0; p < n; p++) {
+                    const i = p * 4;
+                    const r = data.data[i], g = data.data[i + 1], b = data.data[i + 2], a = data.data[i + 3];
+                    const dRed = colorDist([r, g, b], REF_RED);
+                    const dYellow = colorDist([r, g, b], REF_YELLOW);
+                    const g0 = dRed <= dYellow ? 0 : 1;
+                    group[p] = g0;
+                    const lum = relLuminance(r, g, b);
+                    lumDelta[p] = lum - (g0 === 0 ? lumRed : lumYellow);
+                    alpha[p] = a;
+                }
+
+                // DEBUG: visualize the detected groups
+                const debug = document.createElement("canvas");
+                debug.width = c.width;
+                debug.height = c.height;
+
+                const dctx = debug.getContext("2d");
+                const out = dctx.createImageData(c.width, c.height);
+
+                for (let p = 0; p < n; p++) {
+                    const i = p * 4;
+
+                    if (group[p] === 0) {
+                        out.data[i] = 255;
+                        out.data[i + 1] = 0;
+                        out.data[i + 2] = 0;
+                    } else {
+                        out.data[i] = 255;
+                        out.data[i + 1] = 255;
+                        out.data[i + 2] = 0;
+                    }
+
+                    out.data[i + 3] = alpha[p];
+                }
+
+                dctx.putImageData(out, 0, 0);
+                document.body.appendChild(debug);
+
+                TEMPLATE = { w: c.width, h: c.height, group, lumDelta, alpha };
+                log("Loaded disc_template.png (" + c.width + "×" + c.height + ") — pixel arrays built.", "ok");
+                resolve(true);
+            };
+            img.onerror = () => {
+                log("Could not load ./disc_template.png — place it next to this HTML file. Using a generated placeholder ring instead.", "err");
+                // synth a minimal placeholder template: filled disc (red) with a ring band (yellow), circular alpha mask
+                const w = 16, h = 16;
+                const group = new Uint8Array(w * h), lumDelta = new Float32Array(w * h), alpha = new Uint8Array(w * h);
+                const cx = 7.5, cy = 7.5, R = 7.5;
+                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
+                    const p = y * w + x;
+                    const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
+                    alpha[p] = d <= R ? 255 : 0;
+                    const ring = d > 2.3 && d < 3.4;
+                    group[p] = ring ? 1 : 0;
+                    lumDelta[p] = ((x + y) % 3 === 0) ? 0.06 : ((x * y) % 7 === 0 ? -0.08 : 0);
+                }
+                TEMPLATE = { w, h, group, lumDelta, alpha };
+                resolve(false);
+            };
+            img.src = "./disc_template.png";
+        });
+    }
+
+    function buildTexture(mainColor, ringColor) {
+        const { w, h, group, lumDelta, alpha } = TEMPLATE;
+        const canvas = document.createElement("canvas");
+        canvas.width = w; canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        const out = ctx.createImageData(w, h);
+        const mainHsl = rgbToHsl(mainColor.r, mainColor.g, mainColor.b);
+        const ringHsl = rgbToHsl(ringColor.r, ringColor.g, ringColor.b);
+        for (let p = 0; p < w * h; p++) {
+            const useRing = group[p] === 1;
+            const [bh, bs, bl] = useRing ? ringHsl : mainHsl;
+            const newL = Math.min(1, Math.max(0, bl + lumDelta[p]));
+            const [r, g, b] = hslToRgb(bh, bs, newL);
+            const i = p * 4;
+            out.data[i] = r; out.data[i + 1] = g; out.data[i + 2] = b; out.data[i + 3] = alpha[p];
+        }
+        ctx.putImageData(out, 0, 0);
+        return canvas;
+    }
+
+    /* ---------------- metadata ---------------- */
+    function readTags(file) {
+        return new Promise((resolve) => {
+            if (typeof jsmediatags === "undefined") { resolve({}); return; }
+            jsmediatags.read(file, {
+                onSuccess: (tag) => resolve(tag.tags || {}),
+                onError: () => resolve({})
+            });
+        });
+    }
+
+    /* ---------------- state ---------------- */
+    const tracks = []; // {id, file, title, artist, cover(dataURL|null), colors, canvas, oggBlob, duration, status}
+    const usedIds = new Set();
+
+    const tracksEl = $("#tracks"), emptyMsg = $("#emptyMsg"), genBtn = $("#generateBtn"), genHint = $("#genHint");
+
+    function refreshEmpty() {
+        emptyMsg.style.display = tracks.length ? "none" : "block";
+        genBtn.disabled = tracks.length === 0;
+        genHint.textContent = tracks.length ? tracks.length + " track(s) ready." : "Add at least one track to enable this.";
+    }
+
+    async function addFile(file) {
+        let track;
+        try {
+            if (!TEMPLATE) await loadTemplate();
+            const id = uniqueId(slugify(file.name), usedIds);
+            track = {
+                id, file, title: file.name.replace(/\.[a-z0-9]+$/i, ""), artist: "Unknown Artist",
+                cover: null, colors: null, canvas: null, oggBlob: null, duration: 180, status: "reading", error: null
+            };
+            tracks.push(track);
+            renderTrack(track);
+            refreshEmpty();
+        } catch (err) {
+            log("Could not add " + file.name + ": " + err.message, "err");
+            console.error(err);
+            return;
+        }
+
+        try {
+            const tags = await readTags(file);
+            if (tags.title) track.title = tags.title;
+            if (tags.artist) track.artist = tags.artist;
+
+            let imgData = null;
+            if (tags.picture) {
+                const { data, format } = tags.picture;
+                const bytes = new Uint8Array(data);
+                let bin = ""; for (let i = 0; i < bytes.length; i++) bin += String.fromCharCode(bytes[i]);
+                track.cover = `data:${format};base64,${btoa(bin)}`;
+                imgData = await coverToImageData(track.cover);
+            }
+            track.colors = imgData ? extractTwoColors(imgData) : extractTwoColors(fauxImageDataFromString(track.title + track.artist));
+            track.canvas = buildTexture(track.colors.main, track.colors.ring);
+            track.status = "ready";
+        } catch (err) {
+            // Metadata/color/texture step failed — the track stays in the list with sane
+            // fallbacks so you can still fix title/artist/colors by hand and continue.
+            track.status = "error";
+            track.error = err.message;
+            track.colors = track.colors || extractTwoColors(fauxImageDataFromString(track.title + track.artist));
+            track.canvas = track.canvas || buildTexture(track.colors.main, track.colors.ring);
+            log("Problem reading " + file.name + ": " + err.message + " (using fallback title/colors — edit by hand)", "err");
+            console.error(err);
+        }
+        renderTrack(track);
+    }
+
+    function fauxImageDataFromString(str) {
+        // deterministic pseudo cover so tracks without embedded art still get distinct, stable colors
+        const c = document.createElement("canvas"); c.width = 32; c.height = 32;
+        const ctx = c.getContext("2d");
+        let hash = 0; for (let i = 0; i < str.length; i++) { hash = (hash * 31 + str.charCodeAt(i)) >>> 0; }
+        const h1 = hash % 360, h2 = (hash >> 8) % 360;
+        const g = ctx.createLinearGradient(0, 0, 32, 32);
+        g.addColorStop(0, `hsl(${h1},70%,45%)`);
+        g.addColorStop(1, `hsl(${(h2 + 150) % 360},65%,40%)`);
+        ctx.fillStyle = g; ctx.fillRect(0, 0, 32, 32);
+        return ctx.getImageData(0, 0, 32, 32);
+    }
+
+    function coverToImageData(dataUrl) {
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                const c = document.createElement("canvas");
+                const s = 64;
+                c.width = s; c.height = s;
+                const ctx = c.getContext("2d");
+                ctx.drawImage(img, 0, 0, s, s);
+                resolve(ctx.getImageData(0, 0, s, s));
+            };
+            img.onerror = () => resolve(null);
+            img.src = dataUrl;
+        });
+    }
+
+    function renderTrack(t) {
+        let el = document.getElementById("track-" + t.id);
+        if (!el) {
+            el = document.createElement("div");
+            el.className = "track";
+            el.id = "track-" + t.id;
+            tracksEl.appendChild(el);
+        }
+        const previewCanvas = t.canvas ? t.canvas.toDataURL() : null;
+        el.innerHTML = `
     <div class="disc-preview">
       ${previewCanvas ? `<canvas width="16" height="16" style="width:80px;height:80px;image-rendering:pixelated;border-radius:50%;box-shadow:0 6px 18px rgba(0,0,0,.5);" data-src="${previewCanvas}"></canvas>` : `<div style="width:80px;height:80px;border-radius:50%;background:#332c26;display:flex;align-items:center;justify-content:center;font-size:.7rem;color:var(--paper-dim)">…</div>`}
     </div>
     <div class="track-fields">
       <div class="filename">${t.file.name}</div>
       <div class="row">
-        <div><label>Title</label><input type="text" data-field="title" value="${t.title.replace(/"/g,'&quot;')}"></div>
-        <div><label>Artist</label><input type="text" data-field="artist" value="${t.artist.replace(/"/g,'&quot;')}"></div>
+        <div><label>Title</label><input type="text" data-field="title" value="${t.title.replace(/"/g, '&quot;')}"></div>
+        <div><label>Artist</label><input type="text" data-field="artist" value="${t.artist.replace(/"/g, '&quot;')}"></div>
       </div>
       ${t.colors ? `
       <div class="swatches">
         <span class="swatch-label">main</span>
-        <div class="swatch" data-color="main" style="background:${toHex(t.colors.main.r,t.colors.main.g,t.colors.main.b)}" title="Click to change"></div>
+        <div class="swatch" data-color="main" style="background:${toHex(t.colors.main.r, t.colors.main.g, t.colors.main.b)}" title="Click to change"></div>
         <span class="swatch-label">ring</span>
-        <div class="swatch" data-color="ring" style="background:${toHex(t.colors.ring.r,t.colors.ring.g,t.colors.ring.b)}" title="Click to change"></div>
+        <div class="swatch" data-color="ring" style="background:${toHex(t.colors.ring.r, t.colors.ring.g, t.colors.ring.b)}" title="Click to change"></div>
       </div>` : `<div class="hint">Extracting colors…</div>`}
     </div>
     <div class="actions">
-      <span class="status-chip ${t.status==='ready'?'ok':t.status==='error'?'err':'busy'}">${t.status}</span>
+      <span class="status-chip ${t.status === 'ready' ? 'ok' : t.status === 'error' ? 'err' : 'busy'}">${t.status}</span>
       <button class="btn-remove" data-remove>Remove</button>
     </div>
   `;
-  const cnv = el.querySelector("canvas[data-src]");
-  if(cnv){
-    const img = new Image();
-    img.onload = () => { const ctx = cnv.getContext("2d"); ctx.imageSmoothingEnabled=false; ctx.drawImage(img,0,0,16,16); };
-    img.src = cnv.dataset.src;
-  }
-  el.querySelector('[data-field="title"]').addEventListener("input", (e)=>{ t.title = e.target.value; });
-  el.querySelector('[data-field="artist"]').addEventListener("input", (e)=>{ t.artist = e.target.value; });
-  el.querySelectorAll('.swatch[data-color]').forEach(sw=>{
-    sw.addEventListener("click", ()=> openColorModal(t, sw.dataset.color));
-  });
-  el.querySelector("[data-remove]").addEventListener("click", ()=>{
-    const idx = tracks.indexOf(t);
-    if(idx>=0) tracks.splice(idx,1);
-    usedIds.delete(t.id);
-    el.remove();
-    refreshEmpty();
-  });
-}
-function hexToRgb(hex){
-  const v = hex.replace("#","");
-  return {r:parseInt(v.slice(0,2),16), g:parseInt(v.slice(2,4),16), b:parseInt(v.slice(4,6),16)};
-}
-function isValidHex(hex){ return /^#?[0-9a-fA-F]{6}$/.test(hex); }
-
-/* ---------------- custom color picker modal ---------------- */
-const colorModal = $("#colorModal");
-const colorModalCanvas = $("#colorModalCanvas");
-const colorModalHex = $("#colorModalHex");
-const colorModalPreview = $("#colorModalPreview");
-const colorModalTitle = $("#colorModalTitle");
-const eyedropperBtn = $("#eyedropperBtn");
-let colorModalTarget = null; // {track, key}
-
-function updateModalPreview(c){
-  colorModalPreview.style.background = toHex(c.r,c.g,c.b);
-}
-
-function openColorModal(track, key){
-  colorModalTarget = {track, key};
-  colorModalTitle.textContent = (key==="main" ? "Main disc color" : "Ring label color") + " — " + track.title;
-
-  const ctx = colorModalCanvas.getContext("2d");
-  ctx.clearRect(0,0,colorModalCanvas.width,colorModalCanvas.height);
-  const artSrc = track.cover || (track.canvas ? track.canvas.toDataURL() : null);
-  if(artSrc){
-    const img = new Image();
-    img.onload = () => {
-      const cw = colorModalCanvas.width, ch = colorModalCanvas.height;
-      const scale = Math.max(cw/img.width, ch/img.height);
-      const w = img.width*scale, h = img.height*scale;
-      ctx.imageSmoothingEnabled = true;
-      ctx.drawImage(img, (cw-w)/2, (ch-h)/2, w, h);
-    };
-    img.src = artSrc;
-  }
-
-  const current = key==="main" ? track.colors.main : track.colors.ring;
-  colorModalHex.value = toHex(current.r,current.g,current.b);
-  updateModalPreview(current);
-
-  eyedropperBtn.style.display = window.EyeDropper ? "block" : "none";
-  colorModal.style.display = "flex";
-}
-function closeColorModal(){ colorModal.style.display = "none"; colorModalTarget = null; }
-
-colorModalCanvas.addEventListener("click", (e) => {
-  const rect = colorModalCanvas.getBoundingClientRect();
-  const x = Math.floor((e.clientX-rect.left) * (colorModalCanvas.width/rect.width));
-  const y = Math.floor((e.clientY-rect.top) * (colorModalCanvas.height/rect.height));
-  const ctx = colorModalCanvas.getContext("2d");
-  try{
-    const [r,g,b] = ctx.getImageData(x,y,1,1).data;
-    colorModalHex.value = toHex(r,g,b);
-    updateModalPreview({r,g,b});
-  }catch(err){ /* canvas not painted yet */ }
-});
-
-colorModalHex.addEventListener("input", () => {
-  if(isValidHex(colorModalHex.value)){
-    const v = colorModalHex.value.startsWith("#") ? colorModalHex.value : "#"+colorModalHex.value;
-    updateModalPreview(hexToRgb(v));
-  }
-});
-
-eyedropperBtn.addEventListener("click", async () => {
-  try{
-    const result = await new window.EyeDropper().open();
-    colorModalHex.value = result.sRGBHex;
-    updateModalPreview(hexToRgb(result.sRGBHex));
-  }catch(err){ /* user cancelled the eyedropper */ }
-});
-
-$("#colorModalConfirm").addEventListener("click", () => {
-  if(!colorModalTarget) return;
-  if(!isValidHex(colorModalHex.value)){
-    colorModalHex.style.borderColor = "var(--err)";
-    return;
-  }
-  colorModalHex.style.borderColor = "";
-  const v = colorModalHex.value.startsWith("#") ? colorModalHex.value : "#"+colorModalHex.value;
-  const {track, key} = colorModalTarget;
-  track.colors[key] = hexToRgb(v);
-  track.canvas = buildTexture(track.colors.main, track.colors.ring);
-  renderTrack(track);
-  closeColorModal();
-});
-$("#colorModalCancel").addEventListener("click", closeColorModal);
-$("#colorModalClose").addEventListener("click", closeColorModal);
-colorModal.addEventListener("click", (e) => { if(e.target === colorModal) closeColorModal(); });
-document.addEventListener("keydown", (e) => { if(e.key === "Escape" && colorModal.style.display === "flex") closeColorModal(); });
-
-/* ---------------- drag & drop / picker ---------------- */
-const dz = $("#dropzone"), fileInput = $("#fileInput"), fallbackWrap = $("#pickerFallback"), fallbackBtn = $("#fallbackPickBtn");
-
-function openPicker(){
-  try{
-    fileInput.click();
-  }catch(err){
-    fallbackWrap.style.display = "block";
-  }
-}
-dz.addEventListener("click", openPicker);
-fallbackBtn.addEventListener("click", openPicker);
-
-function handleFileList(fileList){
-  const files = Array.from(fileList);
-  if(!files.length) return;
-  files.forEach(f => addFile(f).catch(err => log("Failed to add "+f.name+": "+err.message, "err")));
-}
-fileInput.addEventListener("change", (e)=>{ handleFileList(e.target.files); fileInput.value=""; });
-["dragenter","dragover"].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault();dz.classList.add("drag");}));
-["dragleave","drop"].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault();dz.classList.remove("drag");}));
-dz.addEventListener("drop",(e)=>{
-  const dropped = [...e.dataTransfer.files].filter(f=>f.type.startsWith("audio")||/\.(mp3|wav|flac|m4a|aac|opus|ogg|wma|aiff)$/i.test(f.name));
-  handleFileList(dropped);
-});
-
-/* ---------------- ffmpeg (audio -> ogg vorbis) ---------------- */
-let ffmpegInstance = null;
-
-async function getFfmpeg(){
-  if(ffmpegInstance) return ffmpegInstance;
-
-  const ffmpeg = new FFmpeg();
-
-  ffmpeg.on("log", ({message}) => {
-    console.log(message);
-  });
-
-  await ffmpeg.load({
-    coreURL: await toBlobURL(
-        "/ffmpeg/ffmpeg-core.js",
-        "text/javascript"
-    ),
-    wasmURL: await toBlobURL(
-        "/ffmpeg/ffmpeg-core.wasm",
-        "application/wasm"
-    )
-    });
-
-  ffmpegInstance = ffmpeg;
-  return ffmpeg;
-}
-
-async function convertToOgg(track){
-  const ffmpeg = await getFfmpeg();
-  const inName = "in_"+track.id;
-  const outName = track.id+".ogg";
-  await ffmpeg.writeFile(inName, await fetchFile(track.file));
-  await ffmpeg.exec(["-i", inName, "-vn", "-map", "0:a:0", "-c:a", "libvorbis", "-q:a", "6", "-ar", "44100", outName]);
-  const data = await ffmpeg.readFile(outName);
-  const blob = new Blob([data.buffer], {type:"audio/ogg"});
-  await ffmpeg.deleteFile(inName);
-  await ffmpeg.deleteFile(outName);
-  // duration, decoded from the final ogg so it matches what Minecraft will actually play
-  try{
-    const ctx = new (window.AudioContext||window.webkitAudioContext)();
-    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
-    track.duration = Math.max(1, Math.round(buf.duration));
-    ctx.close();
-  }catch(e){ track.duration = 180; }
-  return blob;
-}
-
-/* ---------------- pack assembly ---------------- */
-function comparatorFor(durationSeconds){
-  return Math.min(15, Math.max(1, Math.round(durationSeconds/30)));
-}
-
-async function canvasToPngBytes(canvas){
-  return new Promise((resolve)=>{
-    canvas.toBlob(async (blob)=>{
-      resolve(new Uint8Array(await blob.arrayBuffer()));
-    }, "image/png");
-  });
-}
-
-async function generateAll(){
-  const namespace = ($("#namespace").value.trim() || "customdiscs").toLowerCase().replace(/[^a-z0-9_.-]/g,"_");
-  const packName = $("#packname").value.trim() || "Custom Discs";
-  if(!tracks.length) return;
-
-  genBtn.disabled = true;
-  progWrap.style.display = "block";
-  logEl.innerHTML = "";
-  setProgress(2);
-  log("Starting build for "+tracks.length+" track(s), namespace \""+namespace+"\"…");
-
-  const zip = new JSZip();
-  const dp = zip.folder("datapack");
-  const rp = zip.folder("resourcepack");
-  const mod = zip.folder("fabric-mod");
-  const geyser = zip.folder("geyser");
-
-  // ---- pack.mcmeta (26.2 -> pack_format 107) ----
-  const PACK_FORMAT = 107;
-  dp.file("pack.mcmeta", JSON.stringify({
-    pack: { pack_format: PACK_FORMAT, description: packName + " (datapack)" }
-  }, null, 2));
-  rp.file("pack.mcmeta", JSON.stringify({
-    pack: { pack_format: PACK_FORMAT, description: packName + " (resource pack)" }
-  }, null, 2));
-
-  const dpNs = dp.folder("data").folder(namespace);
-  const jukeboxDir = dpNs.folder("jukebox_song");
-  const fnDir = dpNs.folder("function");
-
-  const rpNs = rp.folder("assets").folder(namespace);
-  const itemsDir = rpNs.folder("items");
-  const modelsDir = rpNs.folder("models").folder("item");
-  const texDir = rpNs.folder("textures").folder("item");
-  const soundsDir = rpNs.folder("sounds").folder("records");
-  const langEntries = {};
-
-  const modNs = mod.folder("src").folder("main");
-  const modResources = modNs.folder("resources");
-  const modAssetsNs = modResources.folder("assets").folder(namespace);
-  const modItemsDir = modAssetsNs.folder("items");
-  const modModelsDir = modAssetsNs.folder("models").folder("item");
-  const modTexDir = modAssetsNs.folder("textures").folder("item");
-  const modSoundsDir = modAssetsNs.folder("sounds").folder("records");
-  const modDataNs = modResources.folder("data").folder(namespace);
-  const modJukeboxDir = modDataNs.folder("jukebox_song");
-
-  const giveLines = [];
-  const geyserMappings = [];
-  const soundsJson = {};
-  const modSoundsJson = {};
-
-  let i = 0;
-  for(const t of tracks){
-    i++;
-    log(`[${i}/${tracks.length}] ${t.file.name} → converting to OGG Vorbis…`);
-    setProgress(5 + (i-1)/tracks.length*70);
-    let oggBlob;
-    try{
-      oggBlob = await convertToOgg(t);
-    }catch(e){
-      log("  ffmpeg conversion failed: "+e.message, "err");
-      continue;
+        const cnv = el.querySelector("canvas[data-src]");
+        if (cnv) {
+            const img = new Image();
+            img.onload = () => { const ctx = cnv.getContext("2d"); ctx.imageSmoothingEnabled = false; ctx.drawImage(img, 0, 0, 16, 16); };
+            img.src = cnv.dataset.src;
+        }
+        el.querySelector('[data-field="title"]').addEventListener("input", (e) => { t.title = e.target.value; });
+        el.querySelector('[data-field="artist"]').addEventListener("input", (e) => { t.artist = e.target.value; });
+        el.querySelectorAll('.swatch[data-color]').forEach(sw => {
+            sw.addEventListener("click", () => openColorModal(t, sw.dataset.color));
+        });
+        el.querySelector("[data-remove]").addEventListener("click", () => {
+            const idx = tracks.indexOf(t);
+            if (idx >= 0) tracks.splice(idx, 1);
+            usedIds.delete(t.id);
+            el.remove();
+            refreshEmpty();
+        });
     }
-    const oggBytes = new Uint8Array(await oggBlob.arrayBuffer());
-    const pngBytes = await canvasToPngBytes(t.canvas);
-    const id = t.id;
-    const title = t.title || "Unknown Title";
-    const artist = t.artist || "Unknown Artist";
-    const soundEventId = `${namespace}:${id}`;
-    const langKey = `jukebox_song.${namespace}.${id}`;
-    langEntries[langKey] = `${title} - ${artist}`;
+    function hexToRgb(hex) {
+        const v = hex.replace("#", "");
+        return { r: parseInt(v.slice(0, 2), 16), g: parseInt(v.slice(2, 4), 16), b: parseInt(v.slice(4, 6), 16) };
+    }
+    function isValidHex(hex) { return /^#?[0-9a-fA-F]{6}$/.test(hex); }
 
-    // datapack: jukebox_song
-    const jukeboxJson = {
-      sound_event: soundEventId,
-      description: { translate: langKey },
-      length_in_seconds: t.duration,
-      comparator_output: comparatorFor(t.duration)
-    };
-    jukeboxDir.file(id+".json", JSON.stringify(jukeboxJson, null, 2));
-    modJukeboxDir.file(id+".json", JSON.stringify(jukeboxJson, null, 2));
+    /* ---------------- custom color picker modal ---------------- */
+    const colorModal = $("#colorModal");
+    const colorModalCanvas = $("#colorModalCanvas");
+    const colorModalHex = $("#colorModalHex");
+    const colorModalPreview = $("#colorModalPreview");
+    const colorModalTitle = $("#colorModalTitle");
+    const eyedropperBtn = $("#eyedropperBtn");
+    let colorModalTarget = null; // {track, key}
 
-    // resourcepack: item model + item definition + texture + sound
-    const modelJson = {
-      parent: "minecraft:item/generated",
-      textures: { layer0: `${namespace}:item/${id}` }
-    };
-    modelsDir.file(id+".json", JSON.stringify(modelJson, null, 2));
-    modModelsDir.file(id+".json", JSON.stringify(modelJson, null, 2));
+    function updateModalPreview(c) {
+        colorModalPreview.style.background = toHex(c.r, c.g, c.b);
+    }
 
-    const itemDefJson = { model: { type: "minecraft:model", model: `${namespace}:item/${id}` } };
-    itemsDir.file(id+".json", JSON.stringify(itemDefJson, null, 2));
-    modItemsDir.file(id+".json", JSON.stringify(itemDefJson, null, 2));
+    function openColorModal(track, key) {
+        colorModalTarget = { track, key };
+        colorModalTitle.textContent = (key === "main" ? "Main disc color" : "Ring label color") + " — " + track.title;
 
-    texDir.file(id+".png", pngBytes);
-    modTexDir.file(id+".png", pngBytes);
+        const ctx = colorModalCanvas.getContext("2d");
+        ctx.clearRect(0, 0, colorModalCanvas.width, colorModalCanvas.height);
+        const artSrc = track.cover || (track.canvas ? track.canvas.toDataURL() : null);
+        if (artSrc) {
+            const img = new Image();
+            img.onload = () => {
+                const cw = colorModalCanvas.width, ch = colorModalCanvas.height;
+                const scale = Math.max(cw / img.width, ch / img.height);
+                const w = img.width * scale, h = img.height * scale;
+                ctx.imageSmoothingEnabled = true;
+                ctx.drawImage(img, (cw - w) / 2, (ch - h) / 2, w, h);
+            };
+            img.src = artSrc;
+        }
 
-    soundsDir.file(id+".ogg", oggBytes);
-    modSoundsDir.file(id+".ogg", oggBytes);
-    soundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
-    modSoundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
+        const current = key === "main" ? track.colors.main : track.colors.ring;
+        colorModalHex.value = toHex(current.r, current.g, current.b);
+        updateModalPreview(current);
 
-    // give command
-    const nameComp = JSON.stringify({text:title});
-    const loreComp = JSON.stringify([{text:artist, italic:true, color:"gray"}]);
-    giveLines.push(
-      `give @s minecraft:music_disc_11[item_model="${namespace}:${id}",jukebox_playable={song:"${soundEventId}"},custom_name='${nameComp}',lore=[${loreComp.slice(1,-1)}]]`
-    );
+        eyedropperBtn.style.display = window.EyeDropper ? "block" : "none";
+        colorModal.style.display = "flex";
+    }
+    function closeColorModal() { colorModal.style.display = "none"; colorModalTarget = null; }
 
-    // geyser custom item mapping (Geyser 2.x custom_mappings format)
-    geyserMappings.push({
-      name: `${namespace}_${id}`,
-      item: "minecraft:music_disc_11",
-      icon: `${namespace}_${id}`,
-      predicate: { property: "minecraft:custom_model_data", index: 0, fallback: false },
-      custom_model_data: id.length // placeholder distinguishing value; see README for matching real values
+    colorModalCanvas.addEventListener("click", (e) => {
+        const rect = colorModalCanvas.getBoundingClientRect();
+        const x = Math.floor((e.clientX - rect.left) * (colorModalCanvas.width / rect.width));
+        const y = Math.floor((e.clientY - rect.top) * (colorModalCanvas.height / rect.height));
+        const ctx = colorModalCanvas.getContext("2d");
+        try {
+            const [r, g, b] = ctx.getImageData(x, y, 1, 1).data;
+            colorModalHex.value = toHex(r, g, b);
+            updateModalPreview({ r, g, b });
+        } catch (err) { /* canvas not painted yet */ }
     });
 
-    log(`  ✓ ${title} — ${artist} (${t.duration}s, comparator ${comparatorFor(t.duration)})`, "ok");
-    setProgress(5 + i/tracks.length*70);
-  }
+    colorModalHex.addEventListener("input", () => {
+        if (isValidHex(colorModalHex.value)) {
+            const v = colorModalHex.value.startsWith("#") ? colorModalHex.value : "#" + colorModalHex.value;
+            updateModalPreview(hexToRgb(v));
+        }
+    });
 
-  rpNs.file("sounds.json", JSON.stringify(soundsJson, null, 2));
-  modAssetsNs.file("sounds.json", JSON.stringify(modSoundsJson, null, 2));
-  rpNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
-  modAssetsNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
+    eyedropperBtn.addEventListener("click", async () => {
+        try {
+            const result = await new window.EyeDropper().open();
+            colorModalHex.value = result.sRGBHex;
+            updateModalPreview(hexToRgb(result.sRGBHex));
+        } catch (err) { /* user cancelled the eyedropper */ }
+    });
 
-  fnDir.file("give_all.mcfunction", giveLines.join("\n")+"\n");
-  giveLines.forEach((line, idx) => fnDir.file(`give_${tracks[idx] ? tracks[idx].id : idx}.mcfunction`, line+"\n"));
+    $("#colorModalConfirm").addEventListener("click", () => {
+        if (!colorModalTarget) return;
+        if (!isValidHex(colorModalHex.value)) {
+            colorModalHex.style.borderColor = "var(--err)";
+            return;
+        }
+        colorModalHex.style.borderColor = "";
+        const v = colorModalHex.value.startsWith("#") ? colorModalHex.value : "#" + colorModalHex.value;
+        const { track, key } = colorModalTarget;
+        track.colors[key] = hexToRgb(v);
+        track.canvas = buildTexture(track.colors.main, track.colors.ring);
+        renderTrack(track);
+        closeColorModal();
+    });
+    $("#colorModalCancel").addEventListener("click", closeColorModal);
+    $("#colorModalClose").addEventListener("click", closeColorModal);
+    colorModal.addEventListener("click", (e) => { if (e.target === colorModal) closeColorModal(); });
+    document.addEventListener("keydown", (e) => { if (e.key === "Escape" && colorModal.style.display === "flex") closeColorModal(); });
 
-  // ---- fabric.mod.json ----
-  const fabricModJson = {
-    schemaVersion: 1,
-    id: namespace,
-    version: "1.0.0",
-    name: packName,
-    description: `Adds ${tracks.length} custom music disc(s), generated by Disc Press.`,
-    authors: ["Disc Press user"],
-    environment: "*",
-    license: "CC0-1.0",
-    depends: { fabricloader: ">=0.16.0", minecraft: "~26.2", "fabric-resource-loader-v0": "*" }
-  };
-  modResources.file("fabric.mod.json", JSON.stringify(fabricModJson, null, 2));
+    /* ---------------- drag & drop / picker ---------------- */
+    const dz = $("#dropzone"), fileInput = $("#fileInput"), fallbackWrap = $("#pickerFallback"), fallbackBtn = $("#fallbackPickBtn");
 
-  mod.file("build.gradle", buildGradle());
-  mod.file("settings.gradle", `pluginManagement {\n  repositories {\n    maven { url 'https://maven.fabricmc.net/' }\n    gradlePluginPortal()\n  }\n}\n`);
-  mod.file("gradle.properties", gradleProperties());
-  mod.file("README.md", modReadme(namespace));
+    function openPicker() {
+        try {
+            fileInput.click();
+        } catch (err) {
+            fallbackWrap.style.display = "block";
+        }
+    }
+    dz.addEventListener("click", openPicker);
+    fallbackBtn.addEventListener("click", openPicker);
 
-  // ---- geyser mapping ----
-  geyser.file("custom_items.json", JSON.stringify({
-    format_version: "1", identifier: "custom_items", items: { music_disc_11: geyserMappings.map(m=>({
-      name: m.name, custom_model_data: m.custom_model_data, icon: m.icon
-    })) }
-  }, null, 2));
+    function handleFileList(fileList) {
+        const files = Array.from(fileList);
+        if (!files.length) return;
+        files.forEach(f => addFile(f).catch(err => log("Failed to add " + f.name + ": " + err.message, "err")));
+    }
+    fileInput.addEventListener("change", (e) => { handleFileList(e.target.files); fileInput.value = ""; });
+    ["dragenter", "dragover"].forEach(ev => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("drag"); }));
+    ["dragleave", "drop"].forEach(ev => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("drag"); }));
+    dz.addEventListener("drop", (e) => {
+        const dropped = [...e.dataTransfer.files].filter(f => f.type.startsWith("audio") || /\.(mp3|wav|flac|m4a|aac|opus|ogg|wma|aiff)$/i.test(f.name));
+        handleFileList(dropped);
+    });
 
-  zip.file("README.txt", topReadme(namespace, PACK_FORMAT));
+    /* ---------------- ffmpeg (audio -> ogg vorbis) ---------------- */
+    let ffmpegInstance = null;
 
-  setProgress(90);
-  log("Packing zip…");
-  const blob = await zip.generateAsync({type:"blob"}, (meta)=>{ setProgress(90 + meta.percent/10); });
-  setProgress(100);
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = namespace+"_disc_pack.zip";
-  document.body.appendChild(a); a.click(); a.remove();
-  log("Done — download started: "+namespace+"_disc_pack.zip", "ok");
-  genBtn.disabled = false;
-}
+    async function getFfmpeg() {
+        if (ffmpegInstance) return ffmpegInstance;
 
-function buildGradle(){
-return `plugins {
+        const ffmpeg = new FFmpeg();
+
+        ffmpeg.on("log", ({ message }) => {
+            console.log(message);
+        });
+
+        await ffmpeg.load({
+            coreURL: await toBlobURL(
+                "/ffmpeg/ffmpeg-core.js",
+                "text/javascript"
+            ),
+            wasmURL: await toBlobURL(
+                "/ffmpeg/ffmpeg-core.wasm",
+                "application/wasm"
+            )
+        });
+
+        ffmpegInstance = ffmpeg;
+        return ffmpeg;
+    }
+
+    async function convertToOgg(track) {
+        const ffmpeg = await getFfmpeg();
+        const inName = "in_" + track.id;
+        const outName = track.id + ".ogg";
+        await ffmpeg.writeFile(inName, await fetchFile(track.file));
+        await ffmpeg.exec(["-i", inName, "-vn", "-map", "0:a:0", "-c:a", "libvorbis", "-q:a", "6", "-ar", "44100", outName]);
+        const data = await ffmpeg.readFile(outName);
+        const blob = new Blob([data.buffer], { type: "audio/ogg" });
+        await ffmpeg.deleteFile(inName);
+        await ffmpeg.deleteFile(outName);
+        // duration, decoded from the final ogg so it matches what Minecraft will actually play
+        try {
+            const ctx = new (window.AudioContext || window.webkitAudioContext)();
+            const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+            track.duration = Math.max(1, Math.round(buf.duration));
+            ctx.close();
+        } catch (e) { track.duration = 180; }
+        return blob;
+    }
+
+    /* ---------------- pack assembly ---------------- */
+    function comparatorFor(durationSeconds) {
+        return Math.min(15, Math.max(1, Math.round(durationSeconds / 30)));
+    }
+
+    async function canvasToPngBytes(canvas) {
+        return new Promise((resolve) => {
+            canvas.toBlob(async (blob) => {
+                resolve(new Uint8Array(await blob.arrayBuffer()));
+            }, "image/png");
+        });
+    }
+
+    async function generateAll() {
+        const namespace = ($("#namespace").value.trim() || "customdiscs").toLowerCase().replace(/[^a-z0-9_.-]/g, "_");
+        const packName = $("#packname").value.trim() || "Custom Discs";
+        if (!tracks.length) return;
+
+        genBtn.disabled = true;
+        progWrap.style.display = "block";
+        logEl.innerHTML = "";
+        setProgress(2);
+        log("Starting build for " + tracks.length + " track(s), namespace \"" + namespace + "\"…");
+
+        const zip = new JSZip();
+        const dp = zip.folder("datapack");
+        const rp = zip.folder("resourcepack");
+        const mod = zip.folder("fabric-mod");
+        const geyser = zip.folder("geyser");
+
+        // ---- pack.mcmeta (26.2 -> pack_format 107) ----
+        const PACK_FORMAT = 107;
+        dp.file("pack.mcmeta", JSON.stringify({
+            pack: { pack_format: PACK_FORMAT, description: packName + " (datapack)" }
+        }, null, 2));
+        rp.file("pack.mcmeta", JSON.stringify({
+            pack: { pack_format: PACK_FORMAT, description: packName + " (resource pack)" }
+        }, null, 2));
+
+        const dpNs = dp.folder("data").folder(namespace);
+        const jukeboxDir = dpNs.folder("jukebox_song");
+        const fnDir = dpNs.folder("function");
+
+        const rpNs = rp.folder("assets").folder(namespace);
+        const itemsDir = rpNs.folder("items");
+        const modelsDir = rpNs.folder("models").folder("item");
+        const texDir = rpNs.folder("textures").folder("item");
+        const soundsDir = rpNs.folder("sounds").folder("records");
+        const langEntries = {};
+
+        const modNs = mod.folder("src").folder("main");
+        const modResources = modNs.folder("resources");
+        const modAssetsNs = modResources.folder("assets").folder(namespace);
+        const modItemsDir = modAssetsNs.folder("items");
+        const modModelsDir = modAssetsNs.folder("models").folder("item");
+        const modTexDir = modAssetsNs.folder("textures").folder("item");
+        const modSoundsDir = modAssetsNs.folder("sounds").folder("records");
+        const modDataNs = modResources.folder("data").folder(namespace);
+        const modJukeboxDir = modDataNs.folder("jukebox_song");
+
+        const giveLines = [];
+        const geyserMappings = [];
+        const soundsJson = {};
+        const modSoundsJson = {};
+
+        let i = 0;
+        for (const t of tracks) {
+            i++;
+            log(`[${i}/${tracks.length}] ${t.file.name} → converting to OGG Vorbis…`);
+            setProgress(5 + (i - 1) / tracks.length * 70);
+            let oggBlob;
+            try {
+                oggBlob = await convertToOgg(t);
+            } catch (e) {
+                log("  ffmpeg conversion failed: " + e.message, "err");
+                continue;
+            }
+            const oggBytes = new Uint8Array(await oggBlob.arrayBuffer());
+            const pngBytes = await canvasToPngBytes(t.canvas);
+            const id = t.id;
+            const title = t.title || "Unknown Title";
+            const artist = t.artist || "Unknown Artist";
+            const soundEventId = `${namespace}:${id}`;
+            const langKey = `jukebox_song.${namespace}.${id}`;
+            langEntries[langKey] = `${title} - ${artist}`;
+
+            // datapack: jukebox_song
+            const jukeboxJson = {
+                sound_event: soundEventId,
+                description: { translate: langKey },
+                length_in_seconds: t.duration,
+                comparator_output: comparatorFor(t.duration)
+            };
+            jukeboxDir.file(id + ".json", JSON.stringify(jukeboxJson, null, 2));
+            modJukeboxDir.file(id + ".json", JSON.stringify(jukeboxJson, null, 2));
+
+            // resourcepack: item model + item definition + texture + sound
+            const modelJson = {
+                parent: "minecraft:item/generated",
+                textures: { layer0: `${namespace}:item/${id}` }
+            };
+            modelsDir.file(id + ".json", JSON.stringify(modelJson, null, 2));
+            modModelsDir.file(id + ".json", JSON.stringify(modelJson, null, 2));
+
+            const itemDefJson = { model: { type: "minecraft:model", model: `${namespace}:item/${id}` } };
+            itemsDir.file(id + ".json", JSON.stringify(itemDefJson, null, 2));
+            modItemsDir.file(id + ".json", JSON.stringify(itemDefJson, null, 2));
+
+            texDir.file(id + ".png", pngBytes);
+            modTexDir.file(id + ".png", pngBytes);
+
+            soundsDir.file(id + ".ogg", oggBytes);
+            modSoundsDir.file(id + ".ogg", oggBytes);
+            soundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
+            modSoundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
+
+            // give command
+            const nameComp = JSON.stringify({ text: title });
+            const loreComp = JSON.stringify([{ text: artist, italic: true, color: "gray" }]);
+            giveLines.push(
+                `give @s minecraft:music_disc_11[item_model="${namespace}:${id}",jukebox_playable={song:"${soundEventId}"},custom_name='${nameComp}',lore=[${loreComp.slice(1, -1)}]]`
+            );
+
+            // geyser custom item mapping (Geyser 2.x custom_mappings format)
+            geyserMappings.push({
+                name: `${namespace}_${id}`,
+                item: "minecraft:music_disc_11",
+                icon: `${namespace}_${id}`,
+                predicate: { property: "minecraft:custom_model_data", index: 0, fallback: false },
+                custom_model_data: id.length // placeholder distinguishing value; see README for matching real values
+            });
+
+            log(`  ✓ ${title} — ${artist} (${t.duration}s, comparator ${comparatorFor(t.duration)})`, "ok");
+            setProgress(5 + i / tracks.length * 70);
+        }
+
+        rpNs.file("sounds.json", JSON.stringify(soundsJson, null, 2));
+        modAssetsNs.file("sounds.json", JSON.stringify(modSoundsJson, null, 2));
+        rpNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
+        modAssetsNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
+
+        fnDir.file("give_all.mcfunction", giveLines.join("\n") + "\n");
+        giveLines.forEach((line, idx) => fnDir.file(`give_${tracks[idx] ? tracks[idx].id : idx}.mcfunction`, line + "\n"));
+
+        // ---- fabric.mod.json ----
+        const fabricModJson = {
+            schemaVersion: 1,
+            id: namespace,
+            version: "1.0.0",
+            name: packName,
+            description: `Adds ${tracks.length} custom music disc(s), generated by Disc Press.`,
+            authors: ["Disc Press user"],
+            environment: "*",
+            license: "CC0-1.0",
+            depends: { fabricloader: ">=0.16.0", minecraft: "~26.2", "fabric-resource-loader-v0": "*" }
+        };
+        modResources.file("fabric.mod.json", JSON.stringify(fabricModJson, null, 2));
+
+        mod.file("build.gradle", buildGradle());
+        mod.file("settings.gradle", `pluginManagement {\n  repositories {\n    maven { url 'https://maven.fabricmc.net/' }\n    gradlePluginPortal()\n  }\n}\n`);
+        mod.file("gradle.properties", gradleProperties());
+        mod.file("README.md", modReadme(namespace));
+
+        // ---- geyser mapping ----
+        geyser.file("custom_items.json", JSON.stringify({
+            format_version: "1", identifier: "custom_items", items: {
+                music_disc_11: geyserMappings.map(m => ({
+                    name: m.name, custom_model_data: m.custom_model_data, icon: m.icon
+                }))
+            }
+        }, null, 2));
+
+        zip.file("README.txt", topReadme(namespace, PACK_FORMAT));
+
+        setProgress(90);
+        log("Packing zip…");
+        const blob = await zip.generateAsync({ type: "blob" }, (meta) => { setProgress(90 + meta.percent / 10); });
+        setProgress(100);
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url; a.download = namespace + "_disc_pack.zip";
+        document.body.appendChild(a); a.click(); a.remove();
+        log("Done — download started: " + namespace + "_disc_pack.zip", "ok");
+        genBtn.disabled = false;
+    }
+
+    function buildGradle() {
+        return `plugins {
 \tid 'fabric-loom' version '1.7-SNAPSHOT'
 \tid 'maven-publish'
 }
@@ -788,9 +803,9 @@ processResources {
 \t}
 }
 `;
-}
-function gradleProperties(){
-return `# Fill these in from https://fabricmc.net/develop for Minecraft 26.2 —
+    }
+    function gradleProperties() {
+        return `# Fill these in from https://fabricmc.net/develop for Minecraft 26.2 —
 # they change frequently and are deliberately left as placeholders here.
 minecraft_version=26.2
 yarn_mappings=26.2+build.1
@@ -799,9 +814,9 @@ fabric_version=0.100.0+26.2
 mod_version=1.0.0
 maven_group=com.discpress
 `;
-}
-function modReadme(namespace){
-return `# ${namespace} — Fabric music disc mod
+    }
+    function modReadme(namespace) {
+        return `# ${namespace} — Fabric music disc mod
 
 This is a plain resource+data bundle wrapped as a Fabric mod jar. There is
 no Java code: item textures/models, sound events, and jukebox_song entries
@@ -822,9 +837,9 @@ both the resource and data systems.
 
 All compiling happens on your machine — nothing here is pre-built.
 `;
-}
-function topReadme(namespace, packFormat){
-return `Disc Press output
+    }
+    function topReadme(namespace, packFormat) {
+        return `Disc Press output
 ==================
 
 Target version: Minecraft 26.2 (pack_format ${packFormat})
@@ -864,11 +879,11 @@ Only the resourcepack and datapack are needed for a vanilla server/client
 combo. Use fabric-mod instead of (or alongside) them if you want the discs
 bundled as an actual mod, e.g. for a modded Fabric server.
 `;
-}
+    }
 
-genBtn.addEventListener("click", generateAll);
+    genBtn.addEventListener("click", generateAll);
 
-/* preload template as soon as possible */
-loadTemplate();
-refreshEmpty();
+    /* preload template as soon as possible */
+    loadTemplate();
+    refreshEmpty();
 })();
