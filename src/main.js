@@ -189,6 +189,27 @@ function loadTemplate(){
         lumDelta[p] = lum - (g0===0 ? lumRed : lumYellow);
         alpha[p] = a;
       }
+
+      const debug = document.createElement("canvas");
+debug.width = c.width;
+debug.height = c.height;
+
+const dctx = debug.getContext("2d");
+const img = dctx.createImageData(c.width, c.height);
+
+for (let p = 0; p < n; p++) {
+    const i = p * 4;
+    const v = group[p] ? 255 : 0;
+    img.data[i] = v;
+    img.data[i + 1] = v;
+    img.data[i + 2] = v;
+    img.data[i + 3] = 255;
+}
+
+dctx.putImageData(img, 0, 0);
+document.body.appendChild(debug);
+
+
       TEMPLATE = {w:c.width, h:c.height, group, lumDelta, alpha};
       log("Loaded disc_template.png ("+c.width+"×"+c.height+") — pixel arrays built.", "ok");
       resolve(true);
