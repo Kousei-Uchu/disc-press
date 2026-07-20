@@ -66,87 +66,96 @@ function hueDist(a,b){
 }
 function toHex(r,g,b){ return "#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join(""); }
 
-/* Extract two perceptually distinct colors from cover-art image data */
+/* Extract two perceptually distinct colors from cover-art image data.
+   Approach: build a weighted color histogram (coarse RGB buckets so near-identical
+   pixels merge), seed two cluster centers as the heaviest bucket and the bucket
+   farthest from it among the heaviest candidates, then refine both centers with
+   a few passes of weighted k-means over the histogram (cheap — bins, not pixels).
+   This is far more stable than sorting by hue, since hue is undefined/noisy for
+   low-saturation pixels and was the main source of erratic picks before. */
 function extractTwoColors(imgData){
   const data = imgData.data;
-  const HUE_BUCKETS = 36; // 10 deg each
-  const vivid = new Array(HUE_BUCKETS).fill(0).map(()=>({weight:0,sSum:0,lSum:0,n:0}));
-  const all = new Array(HUE_BUCKETS).fill(0).map(()=>({weight:0,sSum:0,lSum:0,n:0}));
-  let vividTotal=0, allTotal=0;
-  let blackWeight=0, whiteWeight=0, totalWeight=0;
+  const hist = new Map();
+  let totalWeight = 0, blackWeight = 0, whiteWeight = 0;
 
-  for(let i=0;i<data.length;i+=4*3){ // sample every 3rd pixel for speed
+  for(let i=0;i<data.length;i+=4*2){ // sample every 2nd pixel
     const r=data[i], g=data[i+1], b=data[i+2], a=data[i+3];
     if(a<64) continue;
-    const [h,s,l] = rgbToHsl(r,g,b);
-    const bucket = Math.floor(h/10)%HUE_BUCKETS;
-    const w = 1;
-    totalWeight += w;
-    all[bucket].weight += w; all[bucket].sSum += s; all[bucket].lSum += l; all[bucket].n++;
-    allTotal += w;
-    const isVivid = s > 0.16 && l > 0.10 && l < 0.90;
-    if(isVivid){
-      vivid[bucket].weight += w; vivid[bucket].sSum += s; vivid[bucket].lSum += l; vivid[bucket].n++;
-      vividTotal += w;
+    const [,s,l] = rgbToHsl(r,g,b);
+    const weight = 0.4 + 0.6*s; // mildly favor saturated pixels without ignoring muted art
+    totalWeight += weight;
+    if(l < 0.08) blackWeight += weight;
+    else if(l > 0.94 && s < 0.10) whiteWeight += weight;
+
+    const key = ((r>>4)<<8) | ((g>>4)<<4) | (b>>4); // 4 bits/channel = 4096 buckets
+    let bucket = hist.get(key);
+    if(!bucket){ bucket = {r:0,g:0,b:0,w:0}; hist.set(key,bucket); }
+    bucket.r += r*weight; bucket.g += g*weight; bucket.b += b*weight; bucket.w += weight;
+  }
+
+  if(hist.size===0 || totalWeight===0){
+    return {main:{r:194,g:84,b:44}, ring:{r:56,g:74,b:120}};
+  }
+
+  const bins = [...hist.values()]
+    .map(b => ({r:b.r/b.w, g:b.g/b.w, b:b.b/b.w, w:b.w}))
+    .sort((a,b) => b.w - a.w);
+
+  const dist3 = (a,b) => Math.sqrt((a.r-b.r)**2 + (a.g-b.g)**2 + (a.b-b.b)**2);
+
+  let center1 = {r:bins[0].r, g:bins[0].g, b:bins[0].b};
+  let center2 = null, bestDist = -1;
+  const pool = bins.slice(0, Math.min(50, bins.length));
+  for(const bin of pool){
+    const d = dist3(bin, center1);
+    if(d > bestDist){ bestDist = d; center2 = {r:bin.r, g:bin.g, b:bin.b}; }
+  }
+  if(!center2) center2 = {r:255-center1.r, g:255-center1.g, b:255-center1.b};
+
+  for(let pass=0; pass<4; pass++){
+    let s1={r:0,g:0,b:0,w:0}, s2={r:0,g:0,b:0,w:0};
+    for(const bin of bins){
+      const d1 = dist3(bin, center1), d2 = dist3(bin, center2);
+      const t = d1 <= d2 ? s1 : s2;
+      t.r += bin.r*bin.w; t.g += bin.g*bin.w; t.b += bin.b*bin.w; t.w += bin.w;
     }
-    if(l < 0.10) blackWeight += w;
-    if(l > 0.92 && s < 0.12) whiteWeight += w;
+    if(s1.w > 0) center1 = {r:s1.r/s1.w, g:s1.g/s1.w, b:s1.b/s1.w};
+    if(s2.w > 0) center2 = {r:s2.r/s2.w, g:s2.g/s2.w, b:s2.b/s2.w};
   }
 
-  function bucketColor(b){
-    const bucket = vivid[b].n ? vivid[b] : all[b];
-    const h = b*10+5;
-    const s = bucket.n ? bucket.sSum/bucket.n : 0.6;
-    const l = bucket.n ? bucket.lSum/bucket.n : 0.5;
-    return {h, s: Math.max(s,0.45), l: Math.min(Math.max(l,0.28),0.72)};
+  let w1=0, w2=0;
+  for(const bin of bins){
+    if(dist3(bin,center1) <= dist3(bin,center2)) w1 += bin.w; else w2 += bin.w;
   }
+  let mainColor = w1 >= w2 ? center1 : center2;
+  let ringColor = w1 >= w2 ? center2 : center1;
 
-  const useSet = (vividTotal / Math.max(allTotal,1)) > 0.04 ? vivid : null;
-
-  let mainIdx = -1, mainWeight = -1;
-  const source = useSet || all;
-  for(let i=0;i<HUE_BUCKETS;i++){
-    if(source[i].weight > mainWeight){ mainWeight = source[i].weight; mainIdx = i; }
-  }
-
-  let ringIdx = -1, ringWeight = -1;
-  for(let i=0;i<HUE_BUCKETS;i++){
-    if(i===mainIdx) continue;
-    if(hueDist(i*10+5, mainIdx*10+5) < 40) continue;
-    if(source[i].weight > ringWeight){ ringWeight = source[i].weight; ringIdx = i; }
-  }
-  // relax the angular constraint if nothing qualified
-  if(ringIdx === -1){
-    for(let i=0;i<HUE_BUCKETS;i++){
-      if(i===mainIdx) continue;
-      if(source[i].weight > ringWeight){ ringWeight = source[i].weight; ringIdx = i; }
+  // Guard against near-black / near-white unless they truly dominate the art
+  const dominantAchromatic = (blackWeight+whiteWeight) / totalWeight > 0.55;
+  function fixAchromatic(c){
+    const [h,s,l] = rgbToHsl(c.r,c.g,c.b);
+    if((s < 0.12 || l < 0.08 || l > 0.94) && !dominantAchromatic){
+      const hue = isFinite(h) ? h : 30;
+      const [r,g,b] = hslToRgb(hue, 0.55, Math.min(Math.max(l,0.32),0.62));
+      return {r,g,b};
     }
+    return c;
+  }
+  mainColor = fixAchromatic(mainColor);
+  ringColor = fixAchromatic(ringColor);
+
+  // Enforce a real minimum separation so the two colors never land near-identical
+  if(dist3(mainColor, ringColor) < 70){
+    const [mh,ms,ml] = rgbToHsl(mainColor.r, mainColor.g, mainColor.b);
+    const altHue = (mh + 150) % 360;
+    const [r,g,b] = hslToRgb(altHue, Math.max(ms,0.5), ml>0.5 ? ml-0.22 : ml+0.22);
+    ringColor = {r,g,b};
   }
 
-  let mainColor, ringColor;
-  if(mainIdx === -1 || vividTotal===0 && whiteWeight+blackWeight < totalWeight*0.55){
-    // no usable signal at all — safe fallback (a warm amber / deep plum, never used blindly if art exists)
-    mainColor = {r:194,g:84,b:44};
-    ringColor = {r:56,g:74,b:120};
-  } else {
-    const mc = bucketColor(mainIdx);
-    const rc = ringIdx===-1 ? {h:(mc.h+150)%360, s:0.5, l:0.45} : bucketColor(ringIdx);
-    const [mr,mg,mb] = hslToRgb(mc.h, mc.s, mc.l);
-    const [rr,rg,rb] = hslToRgb(rc.h, rc.s, rc.l);
-    mainColor = {r:mr,g:mg,b:mb};
-    ringColor = {r:rr,g:rg,b:rb};
-  }
-
-  // Guard against near-black / near-white choices unless they truly dominate the art
-  const dominantAchromatic = (blackWeight+whiteWeight) / Math.max(totalWeight,1) > 0.55;
-  function isAchromatic(c){ const [,s,l]=rgbToHsl(c.r,c.g,c.b); return s<0.12 || l<0.08 || l>0.94; }
-  if(isAchromatic(mainColor) && !dominantAchromatic){ mainColor = {r:194,g:84,b:44}; }
-  if(isAchromatic(ringColor) && !dominantAchromatic){ ringColor = {r:226,g:165,b:58}; }
-  if(colorDist([mainColor.r,mainColor.g,mainColor.b],[ringColor.r,ringColor.g,ringColor.b]) < 60){
-    ringColor = {r:226,g:165,b:58};
-  }
-
-  return {main:mainColor, ring:ringColor};
+  return {
+    main: {r:Math.round(mainColor.r), g:Math.round(mainColor.g), b:Math.round(mainColor.b)},
+    ring: {r:Math.round(ringColor.r), g:Math.round(ringColor.g), b:Math.round(ringColor.b)}
+  };
 }
 
 /* ---------------- disc template reader ---------------- */
@@ -249,29 +258,47 @@ function refreshEmpty(){
 }
 
 async function addFile(file){
-  if(!TEMPLATE) await loadTemplate();
-  const id = uniqueId(slugify(file.name), usedIds);
-  const track = { id, file, title: file.name.replace(/\.[a-z0-9]+$/i,""), artist:"Unknown Artist",
-    cover:null, colors:null, canvas:null, oggBlob:null, duration:180, status:"reading" };
-  tracks.push(track);
-  renderTrack(track);
-  refreshEmpty();
-
-  const tags = await readTags(file);
-  if(tags.title) track.title = tags.title;
-  if(tags.artist) track.artist = tags.artist;
-
-  let imgData = null;
-  if(tags.picture){
-    const {data, format} = tags.picture;
-    const bytes = new Uint8Array(data);
-    let bin = ""; for(let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
-    track.cover = `data:${format};base64,${btoa(bin)}`;
-    imgData = await coverToImageData(track.cover);
+  let track;
+  try{
+    if(!TEMPLATE) await loadTemplate();
+    const id = uniqueId(slugify(file.name), usedIds);
+    track = { id, file, title: file.name.replace(/\.[a-z0-9]+$/i,""), artist:"Unknown Artist",
+      cover:null, colors:null, canvas:null, oggBlob:null, duration:180, status:"reading", error:null };
+    tracks.push(track);
+    renderTrack(track);
+    refreshEmpty();
+  }catch(err){
+    log("Could not add "+file.name+": "+err.message, "err");
+    console.error(err);
+    return;
   }
-  track.colors = imgData ? extractTwoColors(imgData) : extractTwoColors(fauxImageDataFromString(track.title+track.artist));
-  track.canvas = buildTexture(track.colors.main, track.colors.ring);
-  track.status = "ready";
+
+  try{
+    const tags = await readTags(file);
+    if(tags.title) track.title = tags.title;
+    if(tags.artist) track.artist = tags.artist;
+
+    let imgData = null;
+    if(tags.picture){
+      const {data, format} = tags.picture;
+      const bytes = new Uint8Array(data);
+      let bin = ""; for(let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+      track.cover = `data:${format};base64,${btoa(bin)}`;
+      imgData = await coverToImageData(track.cover);
+    }
+    track.colors = imgData ? extractTwoColors(imgData) : extractTwoColors(fauxImageDataFromString(track.title+track.artist));
+    track.canvas = buildTexture(track.colors.main, track.colors.ring);
+    track.status = "ready";
+  }catch(err){
+    // Metadata/color/texture step failed — the track stays in the list with sane
+    // fallbacks so you can still fix title/artist/colors by hand and continue.
+    track.status = "error";
+    track.error = err.message;
+    track.colors = track.colors || extractTwoColors(fauxImageDataFromString(track.title+track.artist));
+    track.canvas = track.canvas || buildTexture(track.colors.main, track.colors.ring);
+    log("Problem reading "+file.name+": "+err.message+" (using fallback title/colors — edit by hand)", "err");
+    console.error(err);
+  }
   renderTrack(track);
 }
 
@@ -326,9 +353,9 @@ function renderTrack(t){
       ${t.colors ? `
       <div class="swatches">
         <span class="swatch-label">main</span>
-        <input type="color" data-color="main" value="${toHex(t.colors.main.r,t.colors.main.g,t.colors.main.b)}">
+        <div class="swatch" data-color="main" style="background:${toHex(t.colors.main.r,t.colors.main.g,t.colors.main.b)}" title="Click to change"></div>
         <span class="swatch-label">ring</span>
-        <input type="color" data-color="ring" value="${toHex(t.colors.ring.r,t.colors.ring.g,t.colors.ring.b)}">
+        <div class="swatch" data-color="ring" style="background:${toHex(t.colors.ring.r,t.colors.ring.g,t.colors.ring.b)}" title="Click to change"></div>
       </div>` : `<div class="hint">Extracting colors…</div>`}
     </div>
     <div class="actions">
@@ -344,15 +371,8 @@ function renderTrack(t){
   }
   el.querySelector('[data-field="title"]').addEventListener("input", (e)=>{ t.title = e.target.value; });
   el.querySelector('[data-field="artist"]').addEventListener("input", (e)=>{ t.artist = e.target.value; });
-  const mainPicker = el.querySelector('[data-color="main"]');
-  const ringPicker = el.querySelector('[data-color="ring"]');
-  if(mainPicker) mainPicker.addEventListener("input", (e)=>{
-    const hex = e.target.value; t.colors.main = hexToRgb(hex);
-    t.canvas = buildTexture(t.colors.main, t.colors.ring); renderTrack(t);
-  });
-  if(ringPicker) ringPicker.addEventListener("input", (e)=>{
-    const hex = e.target.value; t.colors.ring = hexToRgb(hex);
-    t.canvas = buildTexture(t.colors.main, t.colors.ring); renderTrack(t);
+  el.querySelectorAll('.swatch[data-color]').forEach(sw=>{
+    sw.addEventListener("click", ()=> openColorModal(t, sw.dataset.color));
   });
   el.querySelector("[data-remove]").addEventListener("click", ()=>{
     const idx = tracks.indexOf(t);
@@ -366,35 +386,153 @@ function hexToRgb(hex){
   const v = hex.replace("#","");
   return {r:parseInt(v.slice(0,2),16), g:parseInt(v.slice(2,4),16), b:parseInt(v.slice(4,6),16)};
 }
+function isValidHex(hex){ return /^#?[0-9a-fA-F]{6}$/.test(hex); }
+
+/* ---------------- custom color picker modal ---------------- */
+const colorModal = $("#colorModal");
+const colorModalCanvas = $("#colorModalCanvas");
+const colorModalHex = $("#colorModalHex");
+const colorModalPreview = $("#colorModalPreview");
+const colorModalTitle = $("#colorModalTitle");
+const eyedropperBtn = $("#eyedropperBtn");
+let colorModalTarget = null; // {track, key}
+
+function updateModalPreview(c){
+  colorModalPreview.style.background = toHex(c.r,c.g,c.b);
+}
+
+function openColorModal(track, key){
+  colorModalTarget = {track, key};
+  colorModalTitle.textContent = (key==="main" ? "Main disc color" : "Ring label color") + " — " + track.title;
+
+  const ctx = colorModalCanvas.getContext("2d");
+  ctx.clearRect(0,0,colorModalCanvas.width,colorModalCanvas.height);
+  const artSrc = track.cover || (track.canvas ? track.canvas.toDataURL() : null);
+  if(artSrc){
+    const img = new Image();
+    img.onload = () => {
+      const cw = colorModalCanvas.width, ch = colorModalCanvas.height;
+      const scale = Math.max(cw/img.width, ch/img.height);
+      const w = img.width*scale, h = img.height*scale;
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(img, (cw-w)/2, (ch-h)/2, w, h);
+    };
+    img.src = artSrc;
+  }
+
+  const current = key==="main" ? track.colors.main : track.colors.ring;
+  colorModalHex.value = toHex(current.r,current.g,current.b);
+  updateModalPreview(current);
+
+  eyedropperBtn.style.display = window.EyeDropper ? "block" : "none";
+  colorModal.style.display = "flex";
+}
+function closeColorModal(){ colorModal.style.display = "none"; colorModalTarget = null; }
+
+colorModalCanvas.addEventListener("click", (e) => {
+  const rect = colorModalCanvas.getBoundingClientRect();
+  const x = Math.floor((e.clientX-rect.left) * (colorModalCanvas.width/rect.width));
+  const y = Math.floor((e.clientY-rect.top) * (colorModalCanvas.height/rect.height));
+  const ctx = colorModalCanvas.getContext("2d");
+  try{
+    const [r,g,b] = ctx.getImageData(x,y,1,1).data;
+    colorModalHex.value = toHex(r,g,b);
+    updateModalPreview({r,g,b});
+  }catch(err){ /* canvas not painted yet */ }
+});
+
+colorModalHex.addEventListener("input", () => {
+  if(isValidHex(colorModalHex.value)){
+    const v = colorModalHex.value.startsWith("#") ? colorModalHex.value : "#"+colorModalHex.value;
+    updateModalPreview(hexToRgb(v));
+  }
+});
+
+eyedropperBtn.addEventListener("click", async () => {
+  try{
+    const result = await new window.EyeDropper().open();
+    colorModalHex.value = result.sRGBHex;
+    updateModalPreview(hexToRgb(result.sRGBHex));
+  }catch(err){ /* user cancelled the eyedropper */ }
+});
+
+$("#colorModalConfirm").addEventListener("click", () => {
+  if(!colorModalTarget) return;
+  if(!isValidHex(colorModalHex.value)){
+    colorModalHex.style.borderColor = "var(--err)";
+    return;
+  }
+  colorModalHex.style.borderColor = "";
+  const v = colorModalHex.value.startsWith("#") ? colorModalHex.value : "#"+colorModalHex.value;
+  const {track, key} = colorModalTarget;
+  track.colors[key] = hexToRgb(v);
+  track.canvas = buildTexture(track.colors.main, track.colors.ring);
+  renderTrack(track);
+  closeColorModal();
+});
+$("#colorModalCancel").addEventListener("click", closeColorModal);
+$("#colorModalClose").addEventListener("click", closeColorModal);
+colorModal.addEventListener("click", (e) => { if(e.target === colorModal) closeColorModal(); });
+document.addEventListener("keydown", (e) => { if(e.key === "Escape" && colorModal.style.display === "flex") closeColorModal(); });
 
 /* ---------------- drag & drop / picker ---------------- */
-const dz = $("#dropzone"), fileInput = $("#fileInput");
-dz.addEventListener("click", ()=>fileInput.click());
-fileInput.addEventListener("change", (e)=>{ [...e.target.files].forEach(addFile); fileInput.value=""; });
+const dz = $("#dropzone"), fileInput = $("#fileInput"), fallbackWrap = $("#pickerFallback"), fallbackBtn = $("#fallbackPickBtn");
+
+function openPicker(){
+  try{
+    fileInput.click();
+  }catch(err){
+    fallbackWrap.style.display = "block";
+  }
+}
+dz.addEventListener("click", openPicker);
+fallbackBtn.addEventListener("click", openPicker);
+
+function handleFileList(fileList){
+  const files = Array.from(fileList);
+  if(!files.length) return;
+  files.forEach(f => addFile(f).catch(err => log("Failed to add "+f.name+": "+err.message, "err")));
+}
+fileInput.addEventListener("change", (e)=>{ handleFileList(e.target.files); fileInput.value=""; });
 ["dragenter","dragover"].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault();dz.classList.add("drag");}));
 ["dragleave","drop"].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault();dz.classList.remove("drag");}));
-dz.addEventListener("drop",(e)=>{ [...e.dataTransfer.files].filter(f=>f.type.startsWith("audio")||/\.(mp3|wav|flac|m4a|aac|opus|ogg|wma|aiff)$/i.test(f.name)).forEach(addFile); });
+dz.addEventListener("drop",(e)=>{
+  const dropped = [...e.dataTransfer.files].filter(f=>f.type.startsWith("audio")||/\.(mp3|wav|flac|m4a|aac|opus|ogg|wma|aiff)$/i.test(f.name));
+  handleFileList(dropped);
+});
 
 /* ---------------- ffmpeg (audio -> ogg vorbis) ---------------- */
 let ffmpegInstance = null;
+
 async function getFfmpeg(){
   if(ffmpegInstance) return ffmpegInstance;
-  const { FFmpeg } = FFmpegWASM;
-  const { toBlobURL } = FFmpegUtil;
+
   const ffmpeg = new FFmpeg();
-  ffmpeg.on("log", ({message}) => { /* verbose; keep quiet */ });
-  const base = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
-  await ffmpeg.load({
-    coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
-    wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
+
+  ffmpeg.on("log", ({message}) => {
+    console.log(message);
   });
+
+  const base =
+    "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
+
+  await ffmpeg.load({
+    coreURL: await toBlobURL(
+      `${base}/ffmpeg-core.js`,
+      "text/javascript"
+    ),
+    wasmURL: await toBlobURL(
+      `${base}/ffmpeg-core.wasm`,
+      "application/wasm"
+    )
+  });
+
   ffmpegInstance = ffmpeg;
   return ffmpeg;
 }
 
 async function convertToOgg(track){
   const ffmpeg = await getFfmpeg();
-  const { fetchFile } = FFmpegUtil;
   const inName = "in_"+track.id;
   const outName = track.id+".ogg";
   await ffmpeg.writeFile(inName, await fetchFile(track.file));
