@@ -176,6 +176,14 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
                 document.body.appendChild(c);
 
                 const data = ctx.getImageData(0, 0, c.width, c.height);
+
+                console.log({
+    width: c.width,
+    height: c.height,
+    pixels: data.data.length,
+    expected: c.width * c.height * 4
+});
+
                 const n = c.width * c.height;
                 const group = new Uint8Array(n);
                 const lumDelta = new Float32Array(n);
