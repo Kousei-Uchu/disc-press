@@ -175,7 +175,15 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
                 // DEBUG: verify the template actually loaded
                 document.body.appendChild(c);
 
-                const data = ctx.getImageData(0, 0, c.width, c.height);
+                ctx.clearRect(0,0,c.width,c.height);
+ctx.drawImage(img,0,0);
+
+const data = ctx.getImageData(
+    0,
+    0,
+    img.naturalWidth,
+    img.naturalHeight
+);
 
                 console.log({
     width: c.width,
@@ -217,6 +225,16 @@ for(let p=0;p<20;p++){
         ]
     );
 }
+
+console.log(
+    "groups",
+    [...group.slice(0,50)]
+);
+
+console.log(
+    "alpha",
+    [...alpha.slice(0,50)]
+);
 
                 // DEBUG: visualize the detected groups
                 const debug = document.createElement("canvas");
