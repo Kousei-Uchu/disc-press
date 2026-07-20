@@ -1,7 +1,5 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL, fetchFile } from "@ffmpeg/util";
-import coreURL from "@ffmpeg/core/dist/esm/ffmpeg-core.js?url";
-import wasmURL from "@ffmpeg/core/dist/esm/ffmpeg-core.wasm?url";
 
 "use strict";
 
@@ -516,9 +514,15 @@ async function getFfmpeg(){
   });
 
   await ffmpeg.load({
-    coreURL,
-    wasmURL
-  });
+    coreURL: await toBlobURL(
+        "/ffmpeg/ffmpeg-core.js",
+        "text/javascript"
+    ),
+    wasmURL: await toBlobURL(
+        "/ffmpeg/ffmpeg-core.wasm",
+        "application/wasm"
+    )
+    });
 
   ffmpegInstance = ffmpeg;
   return ffmpeg;
