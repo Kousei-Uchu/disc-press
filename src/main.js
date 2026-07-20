@@ -194,6 +194,22 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
                     alpha[p] = a;
                 }
 
+                console.log("Template size:", c.width, c.height);
+console.log("First 20 pixels:");
+
+for(let p=0;p<20;p++){
+    const i=p*4;
+    console.log(
+        p,
+        [
+            data.data[i],
+            data.data[i+1],
+            data.data[i+2],
+            data.data[i+3]
+        ]
+    );
+}
+
                 // DEBUG: visualize the detected groups
                 const debug = document.createElement("canvas");
                 debug.width = c.width;
