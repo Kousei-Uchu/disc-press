@@ -513,18 +513,12 @@ async function getFfmpeg(){
     console.log(message);
   });
 
-  const base =
-    "https://cdn.jsdelivr.net/npm/@ffmpeg/core@0.12.6/dist/esm";
+  import coreURL from "@ffmpeg/core/dist/esm/ffmpeg-core.js?url";
+    import wasmURL from "@ffmpeg/core/dist/esm/ffmpeg-core.wasm?url";
 
   await ffmpeg.load({
-    coreURL: await toBlobURL(
-      `${base}/ffmpeg-core.js`,
-      "text/javascript"
-    ),
-    wasmURL: await toBlobURL(
-      `${base}/ffmpeg-core.wasm`,
-      "application/wasm"
-    )
+    coreURL,
+    wasmURL
   });
 
   ffmpegInstance = ffmpeg;
