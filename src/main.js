@@ -698,7 +698,7 @@ function loadImageData(src) {
             const nameComp = JSON.stringify({ text: title });
             const loreComp = JSON.stringify([{ text: artist, italic: true, color: "gray" }]);
             giveLines.push(
-                `give @s minecraft:music_disc_11[item_model="${namespace}:${id}",jukebox_playable={song:"${soundEventId}"},custom_name='${nameComp}',lore=[${loreComp.slice(1, -1)}]]`
+                `give @s minecraft:music_disc_11[item_model="${namespace}:${id}",jukebox_playable="${soundEventId}",custom_name='${nameComp}',lore=[${loreComp.slice(1, -1)}]]`
             );
 
             // geyser custom item mapping (Geyser 2.x custom_mappings format)
