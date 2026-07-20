@@ -164,152 +164,103 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     const REF_YELLOW = [255, 255, 0];
 
     function loadTemplate() {
-        return new Promise((resolve) => {
-            const img = new Image();
-            img.onload = () => {
-                const c = document.createElement("canvas");
-                c.width = img.width; c.height = img.height;
-                const ctx = c.getContext("2d");
-                ctx.drawImage(img, 0, 0);
-                console.log("image dimensions", img.width, img.height, img.naturalWidth, img.naturalHeight);
+    return Promise.all([
+        loadImageData("./disc_template_main.png"),
+        loadImageData("./disc_template_ring.png")
+    ]).then(([main, ring]) => {
 
-                // DEBUG: verify the template actually loaded
-                document.body.appendChild(c);
+        TEMPLATE = {
+            w: main.width,
+            h: main.height,
+            main,
+            ring
+        };
 
-                ctx.clearRect(0,0,c.width,c.height);
-ctx.drawImage(img,0,0);
-
-const data = ctx.getImageData(
-    0,
-    0,
-    img.naturalWidth,
-    img.naturalHeight
-);
-
-                console.log({
-    width: c.width,
-    height: c.height,
-    pixels: data.data.length,
-    expected: c.width * c.height * 4
-});
-
-                const n = c.width * c.height;
-                const group = new Uint8Array(n);
-                const lumDelta = new Float32Array(n);
-                const alpha = new Uint8Array(n);
-                const lumRed = relLuminance(...REF_RED);
-                const lumYellow = relLuminance(...REF_YELLOW);
-                for (let p = 0; p < n; p++) {
-                    const i = p * 4;
-                    const r = data.data[i], g = data.data[i + 1], b = data.data[i + 2], a = data.data[i + 3];
-                    // Use brightness to separate disc base and ring
-const lum = relLuminance(r, g, b);
-
-group[p] = lum > 0.5 ? 1 : 0;
-
-const baseLum = group[p] === 0 ? lumRed : lumYellow;
-lumDelta[p] = lum - baseLum;
-
-alpha[p] = a;
-                }
-
-                console.log("Template size:", c.width, c.height);
-console.log("First 20 pixels:");
-
-for(let p=0;p<20;p++){
-    const i=p*4;
-    console.log(
-        p,
-        [
-            data.data[i],
-            data.data[i+1],
-            data.data[i+2],
-            data.data[i+3]
-        ]
-    );
+        log("Loaded split disc templates", "ok");
+    });
 }
 
-console.log(
-    "groups",
-    [...group.slice(0,50)]
-);
+function loadImageData(src) {
+    return new Promise(resolve => {
+        const img = new Image();
 
-console.log(
-    "alpha",
-    [...alpha.slice(0,50)]
-);
+        img.onload = () => {
+            const c = document.createElement("canvas");
+            c.width = img.width;
+            c.height = img.height;
 
-                // DEBUG: visualize the detected groups
-                const debug = document.createElement("canvas");
-                debug.width = c.width;
-                debug.height = c.height;
+            const ctx = c.getContext("2d");
+            ctx.drawImage(img,0,0);
 
-                const dctx = debug.getContext("2d");
-                const out = dctx.createImageData(c.width, c.height);
+            resolve({
+                width: img.width,
+                height: img.height,
+                data: ctx.getImageData(
+                    0,
+                    0,
+                    img.width,
+                    img.height
+                )
+            });
+        };
 
-                for (let p = 0; p < n; p++) {
-                    const i = p * 4;
-
-                    if (group[p] === 0) {
-                        out.data[i] = 255;
-                        out.data[i + 1] = 0;
-                        out.data[i + 2] = 0;
-                    } else {
-                        out.data[i] = 255;
-                        out.data[i + 1] = 255;
-                        out.data[i + 2] = 0;
-                    }
-
-                    out.data[i + 3] = alpha[p];
-                }
-
-                dctx.putImageData(out, 0, 0);
-                document.body.appendChild(debug);
-
-                TEMPLATE = { w: c.width, h: c.height, group, lumDelta, alpha };
-                log("Loaded disc_template.png (" + c.width + "×" + c.height + ") — pixel arrays built.", "ok");
-                resolve(true);
-            };
-            img.onerror = () => {
-                log("Could not load ./disc_template.png — place it next to this HTML file. Using a generated placeholder ring instead.", "err");
-                // synth a minimal placeholder template: filled disc (red) with a ring band (yellow), circular alpha mask
-                const w = 16, h = 16;
-                const group = new Uint8Array(w * h), lumDelta = new Float32Array(w * h), alpha = new Uint8Array(w * h);
-                const cx = 7.5, cy = 7.5, R = 7.5;
-                for (let y = 0; y < h; y++) for (let x = 0; x < w; x++) {
-                    const p = y * w + x;
-                    const d = Math.sqrt((x - cx) ** 2 + (y - cy) ** 2);
-                    alpha[p] = d <= R ? 255 : 0;
-                    const ring = d > 2.3 && d < 3.4;
-                    group[p] = ring ? 1 : 0;
-                    lumDelta[p] = ((x + y) % 3 === 0) ? 0.06 : ((x * y) % 7 === 0 ? -0.08 : 0);
-                }
-                TEMPLATE = { w, h, group, lumDelta, alpha };
-                resolve(false);
-            };
-            img.src = "./disc_template.png";
-        });
-    }
+        img.src = src;
+    });
+}
 
     function buildTexture(mainColor, ringColor) {
-        const { w, h, group, lumDelta, alpha } = TEMPLATE;
-        const canvas = document.createElement("canvas");
-        canvas.width = w; canvas.height = h;
-        const ctx = canvas.getContext("2d");
-        const out = ctx.createImageData(w, h);
-        const mainHsl = rgbToHsl(mainColor.r, mainColor.g, mainColor.b);
-        const ringHsl = rgbToHsl(ringColor.r, ringColor.g, ringColor.b);
-        for (let p = 0; p < w * h; p++) {
-            const useRing = group[p] === 1;
-            const [bh, bs, bl] = useRing ? ringHsl : mainHsl;
-            const newL = Math.min(1, Math.max(0, bl + lumDelta[p]));
-            const [r, g, b] = hslToRgb(bh, bs, newL);
-            const i = p * 4;
-            out.data[i] = r; out.data[i + 1] = g; out.data[i + 2] = b; out.data[i + 3] = alpha[p];
+
+    const {w,h,main,ring} = TEMPLATE;
+
+    const canvas = document.createElement("canvas");
+    canvas.width = w;
+    canvas.height = h;
+
+    const ctx = canvas.getContext("2d");
+    const out = ctx.createImageData(w,h);
+
+
+    function applyLayer(layer, color){
+
+        for(let p=0;p<w*h;p++){
+
+            const i=p*4;
+
+            const brightness =
+                layer.data.data[i] / 255;
+
+            const alpha =
+                layer.data.data[i+3];
+
+            if(alpha === 0) continue;
+
+
+            out.data[i] =
+                color.r * brightness;
+
+            out.data[i+1] =
+                color.g * brightness;
+
+            out.data[i+2] =
+                color.b * brightness;
+
+            out.data[i+3] =
+                Math.max(
+                    out.data[i+3],
+                    alpha
+                );
         }
-        ctx.putImageData(out, 0, 0);
-        return canvas;
     }
+
+
+    applyLayer(main.data ? main : main, mainColor);
+    applyLayer(ring.data ? ring : ring, ringColor);
+
+
+    ctx.putImageData(out,0,0);
+
+    return canvas;
+}
 
     /* ---------------- metadata ---------------- */
     function readTags(file) {
