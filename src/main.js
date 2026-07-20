@@ -171,6 +171,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
                 c.width = img.width; c.height = img.height;
                 const ctx = c.getContext("2d");
                 ctx.drawImage(img, 0, 0);
+                console.log("image dimensions", img.width, img.height, img.naturalWidth, img.naturalHeight);
 
                 // DEBUG: verify the template actually loaded
                 document.body.appendChild(c);
