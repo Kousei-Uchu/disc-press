@@ -533,7 +533,7 @@ async function convertToOgg(track){
   const inName = "in_"+track.id;
   const outName = track.id+".ogg";
   await ffmpeg.writeFile(inName, await fetchFile(track.file));
-  await ffmpeg.exec(["-i", inName, "-c:a", "libvorbis", "-q:a", "6", "-ar", "44100", outName]);
+  await ffmpeg.exec(["-i", inName, "-vn", "-map", "0:a:0", "-c:a", "libvorbis", "-q:a", "6", "-ar", "44100", outName]);
   const data = await ffmpeg.readFile(outName);
   const blob = new Blob([data.buffer], {type:"audio/ogg"});
   await ffmpeg.deleteFile(inName);
