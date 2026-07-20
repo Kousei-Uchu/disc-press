@@ -1,5 +1,7 @@
 import { FFmpeg } from "@ffmpeg/ffmpeg";
 import { toBlobURL, fetchFile } from "@ffmpeg/util";
+import coreURL from "@ffmpeg/core/dist/esm/ffmpeg-core.js?url";
+import wasmURL from "@ffmpeg/core/dist/esm/ffmpeg-core.wasm?url";
 
 "use strict";
 
@@ -512,9 +514,6 @@ async function getFfmpeg(){
   ffmpeg.on("log", ({message}) => {
     console.log(message);
   });
-
-  import coreURL from "@ffmpeg/core/dist/esm/ffmpeg-core.js?url";
-    import wasmURL from "@ffmpeg/core/dist/esm/ffmpeg-core.wasm?url";
 
   await ffmpeg.load({
     coreURL,
