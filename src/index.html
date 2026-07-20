@@ -1,0 +1,939 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Disc Press — Custom Music Disc Forge for Minecraft 26.2</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
+<script src="https://unpkg.com/@ffmpeg/ffmpeg@0.12.10/dist/umd/ffmpeg.js"></script>
+<script src="https://unpkg.com/@ffmpeg/util@0.12.1/dist/umd/index.js"></script>
+<style>
+:root{
+  --bg:#12100e;
+  --bg-raised:#1b1815;
+  --bg-card:#211d19;
+  --line:#332c26;
+  --amber:#e2a53a;
+  --amber-dim:#8a6a2f;
+  --ember:#c2542c;
+  --paper:#e9e0d2;
+  --paper-dim:#a89b87;
+  --ok:#7fae6a;
+  --err:#c2542c;
+  --groove: repeating-radial-gradient(circle at center, #000 0px, #000 1px, transparent 1px, transparent 3px);
+}
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:
+    radial-gradient(1200px 600px at 15% -10%, rgba(226,165,58,0.06), transparent 60%),
+    radial-gradient(1000px 500px at 100% 10%, rgba(194,84,44,0.05), transparent 55%),
+    var(--bg);
+  color:var(--paper);
+  font-family:'Iowan Old Style','Georgia',ui-serif,serif;
+  min-height:100vh;
+}
+.wrap{max-width:1080px;margin:0 auto;padding:48px 24px 120px}
+header.hero{display:flex;align-items:flex-end;gap:28px;margin-bottom:8px;flex-wrap:wrap}
+.spindle{
+  width:78px;height:78px;border-radius:50%;flex:none;
+  background: var(--groove), radial-gradient(circle at 35% 30%, #3a2f22, #171310 70%);
+  border:1px solid var(--line);
+  position:relative;
+  animation:spin 9s linear infinite;
+  box-shadow:0 0 0 1px #000 inset, 0 10px 30px rgba(0,0,0,.5);
+}
+.spindle::after{content:"";position:absolute;inset:34%;border-radius:50%;background:var(--amber);box-shadow:0 0 20px rgba(226,165,58,.5)}
+@keyframes spin{to{transform:rotate(360deg)}}
+h1{
+  font-family:'Playfair Display', 'Iowan Old Style', serif;
+  font-size:clamp(2.1rem,4vw,3.1rem);
+  margin:0;
+  letter-spacing:.01em;
+  font-weight:700;
+  color:var(--paper);
+}
+h1 em{color:var(--amber);font-style:normal}
+.tagline{color:var(--paper-dim);font-size:1.02rem;max-width:56ch;margin-top:10px;line-height:1.55}
+.pill-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+.pill{
+  font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:.72rem;letter-spacing:.04em;
+  border:1px solid var(--line);color:var(--paper-dim);padding:5px 10px;border-radius:100px;
+  text-transform:uppercase;
+}
+section{margin-top:46px}
+h2{
+  font-family:'Playfair Display',serif;font-size:1.35rem;color:var(--amber);
+  margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);
+  display:flex;align-items:center;gap:10px;
+}
+h2 .num{font-family:ui-monospace,monospace;font-size:.8rem;color:var(--amber-dim);border:1px solid var(--amber-dim);border-radius:50%;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+
+.panel{background:var(--bg-card);border:1px solid var(--line);border-radius:10px;padding:22px}
+
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+@media (max-width:700px){.grid2{grid-template-columns:1fr}}
+
+label{display:block;font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--paper-dim);margin-bottom:6px}
+input[type=text]{
+  width:100%;background:var(--bg-raised);border:1px solid var(--line);color:var(--paper);
+  padding:10px 12px;border-radius:6px;font-family:inherit;font-size:.95rem;
+}
+input[type=text]:focus{outline:none;border-color:var(--amber-dim)}
+.hint{font-size:.78rem;color:var(--paper-dim);margin-top:6px;line-height:1.5}
+
+.dropzone{
+  border:1.5px dashed var(--line);border-radius:10px;padding:40px 20px;text-align:center;cursor:pointer;
+  transition:border-color .15s, background .15s;
+}
+.dropzone:hover,.dropzone.drag{border-color:var(--amber-dim);background:rgba(226,165,58,.04)}
+.dropzone .big{font-size:1.05rem;color:var(--paper)}
+.dropzone .small{font-size:.82rem;color:var(--paper-dim);margin-top:6px}
+input[type=file]{display:none}
+
+.tracks{display:flex;flex-direction:column;gap:14px;margin-top:18px}
+.track{
+  display:grid;grid-template-columns:88px 1fr auto;gap:18px;align-items:center;
+  background:var(--bg-raised);border:1px solid var(--line);border-radius:10px;padding:16px;
+}
+@media (max-width:720px){.track{grid-template-columns:64px 1fr;}
+  .track .actions{grid-column:1/-1}}
+
+.disc-preview canvas{
+  width:80px;height:80px;image-rendering:pixelated;border-radius:50%;
+  box-shadow:0 6px 18px rgba(0,0,0,.5);
+}
+.track-fields{display:flex;flex-direction:column;gap:8px}
+.track-fields .row{display:flex;gap:10px;flex-wrap:wrap}
+.track-fields input[type=text]{max-width:280px}
+.filename{font-family:ui-monospace,monospace;font-size:.74rem;color:var(--paper-dim);word-break:break-all}
+.swatches{display:flex;align-items:center;gap:8px;margin-top:4px}
+.swatch{width:20px;height:20px;border-radius:5px;border:1px solid rgba(255,255,255,.15);cursor:pointer}
+.swatch-label{font-size:.72rem;color:var(--paper-dim);font-family:ui-monospace,monospace}
+input[type=color]{width:26px;height:26px;border:none;background:none;padding:0;cursor:pointer}
+.actions{display:flex;flex-direction:column;gap:8px;align-items:flex-end}
+.status-chip{font-size:.7rem;padding:3px 9px;border-radius:100px;border:1px solid var(--line);color:var(--paper-dim);font-family:ui-monospace,monospace}
+.status-chip.ok{color:var(--ok);border-color:var(--ok)}
+.status-chip.err{color:var(--err);border-color:var(--err)}
+.status-chip.busy{color:var(--amber);border-color:var(--amber-dim)}
+.btn-remove{background:none;border:none;color:var(--paper-dim);cursor:pointer;font-size:.78rem;text-decoration:underline;padding:0}
+.btn-remove:hover{color:var(--err)}
+
+button.primary{
+  background:linear-gradient(180deg,#eab254,var(--amber) 60%,#c98a2a);
+  color:#231a0c;border:none;padding:13px 26px;border-radius:8px;font-weight:700;
+  font-family:inherit;font-size:1rem;cursor:pointer;letter-spacing:.01em;
+  box-shadow:0 6px 18px rgba(226,165,58,.18);
+}
+button.primary:disabled{opacity:.45;cursor:not-allowed;box-shadow:none}
+button.primary:hover:not(:disabled){filter:brightness(1.06)}
+button.ghost{
+  background:none;border:1px solid var(--line);color:var(--paper);padding:9px 16px;border-radius:8px;
+  font-family:inherit;cursor:pointer;font-size:.88rem;
+}
+button.ghost:hover{border-color:var(--amber-dim)}
+
+.progress-wrap{margin-top:20px}
+.bar{height:6px;background:var(--bg-raised);border-radius:100px;overflow:hidden;border:1px solid var(--line)}
+.bar > div{height:100%;background:linear-gradient(90deg,var(--ember),var(--amber));width:0%;transition:width .25s}
+.log{
+  margin-top:12px;font-family:ui-monospace,monospace;font-size:.76rem;color:var(--paper-dim);
+  max-height:160px;overflow-y:auto;background:var(--bg-raised);border:1px solid var(--line);border-radius:8px;padding:10px 12px;
+}
+.log div{padding:1px 0}
+.log .err{color:var(--err)}
+.log .ok{color:var(--ok)}
+
+.footer-note{margin-top:60px;font-size:.82rem;color:var(--paper-dim);line-height:1.7;border-top:1px solid var(--line);padding-top:22px}
+.footer-note code{background:var(--bg-raised);padding:1px 6px;border-radius:4px;font-size:.85em}
+a{color:var(--amber)}
+.empty{color:var(--paper-dim);font-size:.9rem;text-align:center;padding:20px 0}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <header class="hero">
+    <div class="spindle"></div>
+    <div>
+      <h1>Disc <em>Press</em></h1>
+      <div class="tagline">Turn any audio file into a fully working Minecraft music disc — datapack, resource pack, and a Fabric mod source you compile yourself. Everything runs in your browser; nothing is uploaded anywhere.</div>
+      <div class="pill-row">
+        <span class="pill">Target: 26.2 (pack_format 107)</span>
+        <span class="pill">Fabric-ready</span>
+        <span class="pill">Geyser mapping included</span>
+        <span class="pill">Local conversion only</span>
+      </div>
+    </div>
+  </header>
+
+  <section>
+    <h2><span class="num">1</span>Pack settings</h2>
+    <div class="panel grid2">
+      <div>
+        <label for="namespace">Namespace (lowercase, a–z0–9_)</label>
+        <input type="text" id="namespace" value="customdiscs">
+        <div class="hint">Used everywhere internally: <code>data/&lt;namespace&gt;/…</code>, item ids, sound events.</div>
+      </div>
+      <div>
+        <label for="packname">Pack display name</label>
+        <input type="text" id="packname" value="Custom Discs">
+        <div class="hint">Shown in the resource pack / datapack list and used as the mod name.</div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">2</span>Add tracks</h2>
+    <div class="panel">
+      <div class="dropzone" id="dropzone">
+        <div class="big">Drop audio files here, or click to browse</div>
+        <div class="small">Any format — mp3, wav, flac, m4a, aac, opus, ogg… all converted to OGG Vorbis on your machine.</div>
+        <input type="file" id="fileInput" multiple accept="audio/*">
+      </div>
+      <div class="tracks" id="tracks"></div>
+      <div class="empty" id="emptyMsg">No tracks added yet.</div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">3</span>Forge the pack</h2>
+    <div class="panel">
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <button class="primary" id="generateBtn" disabled>Generate datapack + resource pack + Fabric mod</button>
+        <span class="hint" id="genHint">Add at least one track to enable this.</span>
+      </div>
+      <div class="progress-wrap" id="progressWrap" style="display:none">
+        <div class="bar"><div id="progressBar"></div></div>
+        <div class="log" id="log"></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer-note">
+    <strong>Disc texture generator.</strong> On load, this page reads <code>./disc_template.png</code> (a 16×16 template) and classifies every pixel by hex-distance to pure red vs. pure yellow, records each pixel's luminance offset from that reference color, and records its alpha. Those three per-pixel arrays (group, luminance delta, alpha) are then replayed onto your chosen main / ring colors — group 0 pixels get the main color, group 1 pixels get the ring color, each re-lit by its stored luminance delta and masked by its stored alpha. Nothing about the disc's shading is hand-authored; it's all read out of the template.<br><br>
+    <strong>Colors</strong> are pulled from the embedded cover art (or the filename-derived art if none is embedded): the page buckets vivid pixels by hue, picks the most common hue as the main color and the next most common hue at least 40° away as the ring color, and only falls back to near-black/near-white if the art is genuinely achromatic.<br><br>
+    <strong>Compiling the Fabric mod</strong> is left to you on purpose — the zip includes a complete Gradle project; run <code>./gradlew build</code> yourself. This keeps everything, including the mod build, entirely on your machine.<br><br>
+    <strong>Geyser:</strong> a <code>geyser/custom_items.json</code> mapping file is included so Bedrock players connected through Geyser see the correct icon; drop it into your Geyser <code>custom_mappings</code> the way Geyser's docs describe, since Geyser needs its own item mapping regardless of your resource pack.
+  </div>
+</div>
+
+<script>
+(() => {
+"use strict";
+
+/* ---------------- utility ---------------- */
+const $ = (s) => document.querySelector(s);
+const logEl = $("#log"), progWrap = $("#progressWrap"), progBar = $("#progressBar");
+function log(msg, cls){ const d=document.createElement("div"); if(cls) d.className=cls; d.textContent=msg; logEl.appendChild(d); logEl.scrollTop = logEl.scrollHeight; }
+function setProgress(pct){ progBar.style.width = Math.max(0,Math.min(100,pct))+"%"; }
+function slugify(str){
+  return (str||"track").toString().toLowerCase()
+    .normalize("NFKD").replace(/[\u0300-\u036f]/g,"")
+    .replace(/\.[a-z0-9]+$/i,"")
+    .replace(/[^a-z0-9]+/g,"_")
+    .replace(/^_+|_+$/g,"")
+    .slice(0,48) || "track";
+}
+function uniqueId(base, existing){
+  let id = base, n = 2;
+  while(existing.has(id)){ id = base+"_"+n; n++; }
+  existing.add(id);
+  return id;
+}
+function escapeJson(str){ return JSON.stringify(str).slice(1,-1); }
+
+/* ---------------- color math ---------------- */
+function relLuminance(r,g,b){
+  return (0.2126*r + 0.7152*g + 0.0722*b) / 255;
+}
+function rgbToHsl(r,g,b){
+  r/=255; g/=255; b/=255;
+  const max=Math.max(r,g,b), min=Math.min(r,g,b);
+  let h=0,s=0; const l=(max+min)/2;
+  const d=max-min;
+  if(d!==0){
+    s = d/(1-Math.abs(2*l-1));
+    switch(max){
+      case r: h = 60*(((g-b)/d)%6); break;
+      case g: h = 60*(((b-r)/d)+2); break;
+      case b: h = 60*(((r-g)/d)+4); break;
+    }
+  }
+  if(h<0) h+=360;
+  return [h,s,l];
+}
+function hslToRgb(h,s,l){
+  const c=(1-Math.abs(2*l-1))*s;
+  const x=c*(1-Math.abs((h/60)%2-1));
+  const m=l-c/2;
+  let r=0,g=0,b=0;
+  if(h<60){r=c;g=x;b=0} else if(h<120){r=x;g=c;b=0}
+  else if(h<180){r=0;g=c;b=x} else if(h<240){r=0;g=x;b=c}
+  else if(h<300){r=x;g=0;b=c} else {r=c;g=0;b=x}
+  return [Math.round((r+m)*255), Math.round((g+m)*255), Math.round((b+m)*255)];
+}
+function colorDist(c1,c2){
+  const dr=c1[0]-c2[0], dg=c1[1]-c2[1], db=c1[2]-c2[2];
+  return Math.sqrt(dr*dr+dg*dg+db*db);
+}
+function hueDist(a,b){
+  const d = Math.abs(a-b)%360;
+  return d>180 ? 360-d : d;
+}
+function toHex(r,g,b){ return "#"+[r,g,b].map(v=>v.toString(16).padStart(2,"0")).join(""); }
+
+/* Extract two perceptually distinct colors from cover-art image data */
+function extractTwoColors(imgData){
+  const data = imgData.data;
+  const HUE_BUCKETS = 36; // 10 deg each
+  const vivid = new Array(HUE_BUCKETS).fill(0).map(()=>({weight:0,sSum:0,lSum:0,n:0}));
+  const all = new Array(HUE_BUCKETS).fill(0).map(()=>({weight:0,sSum:0,lSum:0,n:0}));
+  let vividTotal=0, allTotal=0;
+  let blackWeight=0, whiteWeight=0, totalWeight=0;
+
+  for(let i=0;i<data.length;i+=4*3){ // sample every 3rd pixel for speed
+    const r=data[i], g=data[i+1], b=data[i+2], a=data[i+3];
+    if(a<64) continue;
+    const [h,s,l] = rgbToHsl(r,g,b);
+    const bucket = Math.floor(h/10)%HUE_BUCKETS;
+    const w = 1;
+    totalWeight += w;
+    all[bucket].weight += w; all[bucket].sSum += s; all[bucket].lSum += l; all[bucket].n++;
+    allTotal += w;
+    const isVivid = s > 0.16 && l > 0.10 && l < 0.90;
+    if(isVivid){
+      vivid[bucket].weight += w; vivid[bucket].sSum += s; vivid[bucket].lSum += l; vivid[bucket].n++;
+      vividTotal += w;
+    }
+    if(l < 0.10) blackWeight += w;
+    if(l > 0.92 && s < 0.12) whiteWeight += w;
+  }
+
+  function bucketColor(b){
+    const bucket = vivid[b].n ? vivid[b] : all[b];
+    const h = b*10+5;
+    const s = bucket.n ? bucket.sSum/bucket.n : 0.6;
+    const l = bucket.n ? bucket.lSum/bucket.n : 0.5;
+    return {h, s: Math.max(s,0.45), l: Math.min(Math.max(l,0.28),0.72)};
+  }
+
+  const useSet = (vividTotal / Math.max(allTotal,1)) > 0.04 ? vivid : null;
+
+  let mainIdx = -1, mainWeight = -1;
+  const source = useSet || all;
+  for(let i=0;i<HUE_BUCKETS;i++){
+    if(source[i].weight > mainWeight){ mainWeight = source[i].weight; mainIdx = i; }
+  }
+
+  let ringIdx = -1, ringWeight = -1;
+  for(let i=0;i<HUE_BUCKETS;i++){
+    if(i===mainIdx) continue;
+    if(hueDist(i*10+5, mainIdx*10+5) < 40) continue;
+    if(source[i].weight > ringWeight){ ringWeight = source[i].weight; ringIdx = i; }
+  }
+  // relax the angular constraint if nothing qualified
+  if(ringIdx === -1){
+    for(let i=0;i<HUE_BUCKETS;i++){
+      if(i===mainIdx) continue;
+      if(source[i].weight > ringWeight){ ringWeight = source[i].weight; ringIdx = i; }
+    }
+  }
+
+  let mainColor, ringColor;
+  if(mainIdx === -1 || vividTotal===0 && whiteWeight+blackWeight < totalWeight*0.55){
+    // no usable signal at all — safe fallback (a warm amber / deep plum, never used blindly if art exists)
+    mainColor = {r:194,g:84,b:44};
+    ringColor = {r:56,g:74,b:120};
+  } else {
+    const mc = bucketColor(mainIdx);
+    const rc = ringIdx===-1 ? {h:(mc.h+150)%360, s:0.5, l:0.45} : bucketColor(ringIdx);
+    const [mr,mg,mb] = hslToRgb(mc.h, mc.s, mc.l);
+    const [rr,rg,rb] = hslToRgb(rc.h, rc.s, rc.l);
+    mainColor = {r:mr,g:mg,b:mb};
+    ringColor = {r:rr,g:rg,b:rb};
+  }
+
+  // Guard against near-black / near-white choices unless they truly dominate the art
+  const dominantAchromatic = (blackWeight+whiteWeight) / Math.max(totalWeight,1) > 0.55;
+  function isAchromatic(c){ const [,s,l]=rgbToHsl(c.r,c.g,c.b); return s<0.12 || l<0.08 || l>0.94; }
+  if(isAchromatic(mainColor) && !dominantAchromatic){ mainColor = {r:194,g:84,b:44}; }
+  if(isAchromatic(ringColor) && !dominantAchromatic){ ringColor = {r:226,g:165,b:58}; }
+  if(colorDist([mainColor.r,mainColor.g,mainColor.b],[ringColor.r,ringColor.g,ringColor.b]) < 60){
+    ringColor = {r:226,g:165,b:58};
+  }
+
+  return {main:mainColor, ring:ringColor};
+}
+
+/* ---------------- disc template reader ---------------- */
+let TEMPLATE = null; // {w,h,group:[],lumDelta:[],alpha:[]}
+const REF_RED = [255,0,0];
+const REF_YELLOW = [255,255,0];
+
+function loadTemplate(){
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      c.width = img.width; c.height = img.height;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img,0,0);
+      const data = ctx.getImageData(0,0,c.width,c.height);
+      const n = c.width*c.height;
+      const group = new Uint8Array(n);
+      const lumDelta = new Float32Array(n);
+      const alpha = new Uint8Array(n);
+      const lumRed = relLuminance(...REF_RED);
+      const lumYellow = relLuminance(...REF_YELLOW);
+      for(let p=0;p<n;p++){
+        const i = p*4;
+        const r=data.data[i], g=data.data[i+1], b=data.data[i+2], a=data.data[i+3];
+        const dRed = colorDist([r,g,b], REF_RED);
+        const dYellow = colorDist([r,g,b], REF_YELLOW);
+        const g0 = dRed <= dYellow ? 0 : 1;
+        group[p] = g0;
+        const lum = relLuminance(r,g,b);
+        lumDelta[p] = lum - (g0===0 ? lumRed : lumYellow);
+        alpha[p] = a;
+      }
+      TEMPLATE = {w:c.width, h:c.height, group, lumDelta, alpha};
+      log("Loaded disc_template.png ("+c.width+"×"+c.height+") — pixel arrays built.", "ok");
+      resolve(true);
+    };
+    img.onerror = () => {
+      log("Could not load ./disc_template.png — place it next to this HTML file. Using a generated placeholder ring instead.", "err");
+      // synth a minimal placeholder template: filled disc (red) with a ring band (yellow), circular alpha mask
+      const w=16,h=16;
+      const group = new Uint8Array(w*h), lumDelta = new Float32Array(w*h), alpha = new Uint8Array(w*h);
+      const cx=7.5, cy=7.5, R=7.5;
+      for(let y=0;y<h;y++) for(let x=0;x<w;x++){
+        const p=y*w+x;
+        const d = Math.sqrt((x-cx)**2+(y-cy)**2);
+        alpha[p] = d<=R ? 255 : 0;
+        const ring = d>2.3 && d<3.4;
+        group[p] = ring ? 1 : 0;
+        lumDelta[p] = ((x+y)%3===0) ? 0.06 : ((x*y)%7===0 ? -0.08 : 0);
+      }
+      TEMPLATE = {w,h,group,lumDelta,alpha};
+      resolve(false);
+    };
+    img.src = "./disc_template.png";
+  });
+}
+
+function buildTexture(mainColor, ringColor){
+  const {w,h,group,lumDelta,alpha} = TEMPLATE;
+  const canvas = document.createElement("canvas");
+  canvas.width = w; canvas.height = h;
+  const ctx = canvas.getContext("2d");
+  const out = ctx.createImageData(w,h);
+  const mainHsl = rgbToHsl(mainColor.r,mainColor.g,mainColor.b);
+  const ringHsl = rgbToHsl(ringColor.r,ringColor.g,ringColor.b);
+  for(let p=0;p<w*h;p++){
+    const useRing = group[p]===1;
+    const [bh,bs,bl] = useRing ? ringHsl : mainHsl;
+    const newL = Math.min(1,Math.max(0, bl + lumDelta[p]));
+    const [r,g,b] = hslToRgb(bh,bs,newL);
+    const i=p*4;
+    out.data[i]=r; out.data[i+1]=g; out.data[i+2]=b; out.data[i+3]=alpha[p];
+  }
+  ctx.putImageData(out,0,0);
+  return canvas;
+}
+
+/* ---------------- metadata ---------------- */
+function readTags(file){
+  return new Promise((resolve) => {
+    if(typeof jsmediatags === "undefined"){ resolve({}); return; }
+    jsmediatags.read(file, {
+      onSuccess: (tag) => resolve(tag.tags || {}),
+      onError: () => resolve({})
+    });
+  });
+}
+
+/* ---------------- state ---------------- */
+const tracks = []; // {id, file, title, artist, cover(dataURL|null), colors, canvas, oggBlob, duration, status}
+const usedIds = new Set();
+
+const tracksEl = $("#tracks"), emptyMsg = $("#emptyMsg"), genBtn = $("#generateBtn"), genHint = $("#genHint");
+
+function refreshEmpty(){
+  emptyMsg.style.display = tracks.length ? "none" : "block";
+  genBtn.disabled = tracks.length === 0;
+  genHint.textContent = tracks.length ? tracks.length+" track(s) ready." : "Add at least one track to enable this.";
+}
+
+async function addFile(file){
+  if(!TEMPLATE) await loadTemplate();
+  const id = uniqueId(slugify(file.name), usedIds);
+  const track = { id, file, title: file.name.replace(/\.[a-z0-9]+$/i,""), artist:"Unknown Artist",
+    cover:null, colors:null, canvas:null, oggBlob:null, duration:180, status:"reading" };
+  tracks.push(track);
+  renderTrack(track);
+  refreshEmpty();
+
+  const tags = await readTags(file);
+  if(tags.title) track.title = tags.title;
+  if(tags.artist) track.artist = tags.artist;
+
+  let imgData = null;
+  if(tags.picture){
+    const {data, format} = tags.picture;
+    const bytes = new Uint8Array(data);
+    let bin = ""; for(let i=0;i<bytes.length;i++) bin += String.fromCharCode(bytes[i]);
+    track.cover = `data:${format};base64,${btoa(bin)}`;
+    imgData = await coverToImageData(track.cover);
+  }
+  track.colors = imgData ? extractTwoColors(imgData) : extractTwoColors(fauxImageDataFromString(track.title+track.artist));
+  track.canvas = buildTexture(track.colors.main, track.colors.ring);
+  track.status = "ready";
+  renderTrack(track);
+}
+
+function fauxImageDataFromString(str){
+  // deterministic pseudo cover so tracks without embedded art still get distinct, stable colors
+  const c=document.createElement("canvas"); c.width=32; c.height=32;
+  const ctx=c.getContext("2d");
+  let hash=0; for(let i=0;i<str.length;i++){ hash = (hash*31 + str.charCodeAt(i)) >>> 0; }
+  const h1 = hash%360, h2=(hash>>8)%360;
+  const g = ctx.createLinearGradient(0,0,32,32);
+  g.addColorStop(0, `hsl(${h1},70%,45%)`);
+  g.addColorStop(1, `hsl(${(h2+150)%360},65%,40%)`);
+  ctx.fillStyle=g; ctx.fillRect(0,0,32,32);
+  return ctx.getImageData(0,0,32,32);
+}
+
+function coverToImageData(dataUrl){
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement("canvas");
+      const s = 64;
+      c.width=s; c.height=s;
+      const ctx = c.getContext("2d");
+      ctx.drawImage(img,0,0,s,s);
+      resolve(ctx.getImageData(0,0,s,s));
+    };
+    img.onerror = () => resolve(null);
+    img.src = dataUrl;
+  });
+}
+
+function renderTrack(t){
+  let el = document.getElementById("track-"+t.id);
+  if(!el){
+    el = document.createElement("div");
+    el.className = "track";
+    el.id = "track-"+t.id;
+    tracksEl.appendChild(el);
+  }
+  const previewCanvas = t.canvas ? t.canvas.toDataURL() : null;
+  el.innerHTML = `
+    <div class="disc-preview">
+      ${previewCanvas ? `<canvas width="16" height="16" style="width:80px;height:80px;image-rendering:pixelated;border-radius:50%;box-shadow:0 6px 18px rgba(0,0,0,.5);" data-src="${previewCanvas}"></canvas>` : `<div style="width:80px;height:80px;border-radius:50%;background:#332c26;display:flex;align-items:center;justify-content:center;font-size:.7rem;color:var(--paper-dim)">…</div>`}
+    </div>
+    <div class="track-fields">
+      <div class="filename">${t.file.name}</div>
+      <div class="row">
+        <div><label>Title</label><input type="text" data-field="title" value="${t.title.replace(/"/g,'&quot;')}"></div>
+        <div><label>Artist</label><input type="text" data-field="artist" value="${t.artist.replace(/"/g,'&quot;')}"></div>
+      </div>
+      ${t.colors ? `
+      <div class="swatches">
+        <span class="swatch-label">main</span>
+        <input type="color" data-color="main" value="${toHex(t.colors.main.r,t.colors.main.g,t.colors.main.b)}">
+        <span class="swatch-label">ring</span>
+        <input type="color" data-color="ring" value="${toHex(t.colors.ring.r,t.colors.ring.g,t.colors.ring.b)}">
+      </div>` : `<div class="hint">Extracting colors…</div>`}
+    </div>
+    <div class="actions">
+      <span class="status-chip ${t.status==='ready'?'ok':t.status==='error'?'err':'busy'}">${t.status}</span>
+      <button class="btn-remove" data-remove>Remove</button>
+    </div>
+  `;
+  const cnv = el.querySelector("canvas[data-src]");
+  if(cnv){
+    const img = new Image();
+    img.onload = () => { const ctx = cnv.getContext("2d"); ctx.imageSmoothingEnabled=false; ctx.drawImage(img,0,0,16,16); };
+    img.src = cnv.dataset.src;
+  }
+  el.querySelector('[data-field="title"]').addEventListener("input", (e)=>{ t.title = e.target.value; });
+  el.querySelector('[data-field="artist"]').addEventListener("input", (e)=>{ t.artist = e.target.value; });
+  const mainPicker = el.querySelector('[data-color="main"]');
+  const ringPicker = el.querySelector('[data-color="ring"]');
+  if(mainPicker) mainPicker.addEventListener("input", (e)=>{
+    const hex = e.target.value; t.colors.main = hexToRgb(hex);
+    t.canvas = buildTexture(t.colors.main, t.colors.ring); renderTrack(t);
+  });
+  if(ringPicker) ringPicker.addEventListener("input", (e)=>{
+    const hex = e.target.value; t.colors.ring = hexToRgb(hex);
+    t.canvas = buildTexture(t.colors.main, t.colors.ring); renderTrack(t);
+  });
+  el.querySelector("[data-remove]").addEventListener("click", ()=>{
+    const idx = tracks.indexOf(t);
+    if(idx>=0) tracks.splice(idx,1);
+    usedIds.delete(t.id);
+    el.remove();
+    refreshEmpty();
+  });
+}
+function hexToRgb(hex){
+  const v = hex.replace("#","");
+  return {r:parseInt(v.slice(0,2),16), g:parseInt(v.slice(2,4),16), b:parseInt(v.slice(4,6),16)};
+}
+
+/* ---------------- drag & drop / picker ---------------- */
+const dz = $("#dropzone"), fileInput = $("#fileInput");
+dz.addEventListener("click", ()=>fileInput.click());
+fileInput.addEventListener("change", (e)=>{ [...e.target.files].forEach(addFile); fileInput.value=""; });
+["dragenter","dragover"].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault();dz.classList.add("drag");}));
+["dragleave","drop"].forEach(ev=>dz.addEventListener(ev,(e)=>{e.preventDefault();dz.classList.remove("drag");}));
+dz.addEventListener("drop",(e)=>{ [...e.dataTransfer.files].filter(f=>f.type.startsWith("audio")||/\.(mp3|wav|flac|m4a|aac|opus|ogg|wma|aiff)$/i.test(f.name)).forEach(addFile); });
+
+/* ---------------- ffmpeg (audio -> ogg vorbis) ---------------- */
+let ffmpegInstance = null;
+async function getFfmpeg(){
+  if(ffmpegInstance) return ffmpegInstance;
+  const { FFmpeg } = FFmpegWASM;
+  const { toBlobURL } = FFmpegUtil;
+  const ffmpeg = new FFmpeg();
+  ffmpeg.on("log", ({message}) => { /* verbose; keep quiet */ });
+  const base = "https://unpkg.com/@ffmpeg/core@0.12.6/dist/umd";
+  await ffmpeg.load({
+    coreURL: await toBlobURL(`${base}/ffmpeg-core.js`, "text/javascript"),
+    wasmURL: await toBlobURL(`${base}/ffmpeg-core.wasm`, "application/wasm"),
+  });
+  ffmpegInstance = ffmpeg;
+  return ffmpeg;
+}
+
+async function convertToOgg(track){
+  const ffmpeg = await getFfmpeg();
+  const { fetchFile } = FFmpegUtil;
+  const inName = "in_"+track.id;
+  const outName = track.id+".ogg";
+  await ffmpeg.writeFile(inName, await fetchFile(track.file));
+  await ffmpeg.exec(["-i", inName, "-c:a", "libvorbis", "-q:a", "6", "-ar", "44100", outName]);
+  const data = await ffmpeg.readFile(outName);
+  const blob = new Blob([data.buffer], {type:"audio/ogg"});
+  await ffmpeg.deleteFile(inName);
+  await ffmpeg.deleteFile(outName);
+  // duration, decoded from the final ogg so it matches what Minecraft will actually play
+  try{
+    const ctx = new (window.AudioContext||window.webkitAudioContext)();
+    const buf = await ctx.decodeAudioData(await blob.arrayBuffer());
+    track.duration = Math.max(1, Math.round(buf.duration));
+    ctx.close();
+  }catch(e){ track.duration = 180; }
+  return blob;
+}
+
+/* ---------------- pack assembly ---------------- */
+function comparatorFor(durationSeconds){
+  return Math.min(15, Math.max(1, Math.round(durationSeconds/30)));
+}
+
+async function canvasToPngBytes(canvas){
+  return new Promise((resolve)=>{
+    canvas.toBlob(async (blob)=>{
+      resolve(new Uint8Array(await blob.arrayBuffer()));
+    }, "image/png");
+  });
+}
+
+async function generateAll(){
+  const namespace = ($("#namespace").value.trim() || "customdiscs").toLowerCase().replace(/[^a-z0-9_.-]/g,"_");
+  const packName = $("#packname").value.trim() || "Custom Discs";
+  if(!tracks.length) return;
+
+  genBtn.disabled = true;
+  progWrap.style.display = "block";
+  logEl.innerHTML = "";
+  setProgress(2);
+  log("Starting build for "+tracks.length+" track(s), namespace \""+namespace+"\"…");
+
+  const zip = new JSZip();
+  const dp = zip.folder("datapack");
+  const rp = zip.folder("resourcepack");
+  const mod = zip.folder("fabric-mod");
+  const geyser = zip.folder("geyser");
+
+  // ---- pack.mcmeta (26.2 -> pack_format 107) ----
+  const PACK_FORMAT = 107;
+  dp.file("pack.mcmeta", JSON.stringify({
+    pack: { pack_format: PACK_FORMAT, description: packName + " (datapack)" }
+  }, null, 2));
+  rp.file("pack.mcmeta", JSON.stringify({
+    pack: { pack_format: PACK_FORMAT, description: packName + " (resource pack)" }
+  }, null, 2));
+
+  const dpNs = dp.folder("data").folder(namespace);
+  const jukeboxDir = dpNs.folder("jukebox_song");
+  const fnDir = dpNs.folder("function");
+
+  const rpNs = rp.folder("assets").folder(namespace);
+  const itemsDir = rpNs.folder("items");
+  const modelsDir = rpNs.folder("models").folder("item");
+  const texDir = rpNs.folder("textures").folder("item");
+  const soundsDir = rpNs.folder("sounds").folder("records");
+  const langEntries = {};
+
+  const modNs = mod.folder("src").folder("main");
+  const modResources = modNs.folder("resources");
+  const modAssetsNs = modResources.folder("assets").folder(namespace);
+  const modItemsDir = modAssetsNs.folder("items");
+  const modModelsDir = modAssetsNs.folder("models").folder("item");
+  const modTexDir = modAssetsNs.folder("textures").folder("item");
+  const modSoundsDir = modAssetsNs.folder("sounds").folder("records");
+  const modDataNs = modResources.folder("data").folder(namespace);
+  const modJukeboxDir = modDataNs.folder("jukebox_song");
+
+  const giveLines = [];
+  const geyserMappings = [];
+  const soundsJson = {};
+  const modSoundsJson = {};
+
+  let i = 0;
+  for(const t of tracks){
+    i++;
+    log(`[${i}/${tracks.length}] ${t.file.name} → converting to OGG Vorbis…`);
+    setProgress(5 + (i-1)/tracks.length*70);
+    let oggBlob;
+    try{
+      oggBlob = await convertToOgg(t);
+    }catch(e){
+      log("  ffmpeg conversion failed: "+e.message, "err");
+      continue;
+    }
+    const oggBytes = new Uint8Array(await oggBlob.arrayBuffer());
+    const pngBytes = await canvasToPngBytes(t.canvas);
+    const id = t.id;
+    const title = t.title || "Unknown Title";
+    const artist = t.artist || "Unknown Artist";
+    const soundEventId = `${namespace}:${id}`;
+    const langKey = `jukebox_song.${namespace}.${id}`;
+    langEntries[langKey] = `${title} - ${artist}`;
+
+    // datapack: jukebox_song
+    const jukeboxJson = {
+      sound_event: soundEventId,
+      description: { translate: langKey },
+      length_in_seconds: t.duration,
+      comparator_output: comparatorFor(t.duration)
+    };
+    jukeboxDir.file(id+".json", JSON.stringify(jukeboxJson, null, 2));
+    modJukeboxDir.file(id+".json", JSON.stringify(jukeboxJson, null, 2));
+
+    // resourcepack: item model + item definition + texture + sound
+    const modelJson = {
+      parent: "minecraft:item/generated",
+      textures: { layer0: `${namespace}:item/${id}` }
+    };
+    modelsDir.file(id+".json", JSON.stringify(modelJson, null, 2));
+    modModelsDir.file(id+".json", JSON.stringify(modelJson, null, 2));
+
+    const itemDefJson = { model: { type: "minecraft:model", model: `${namespace}:item/${id}` } };
+    itemsDir.file(id+".json", JSON.stringify(itemDefJson, null, 2));
+    modItemsDir.file(id+".json", JSON.stringify(itemDefJson, null, 2));
+
+    texDir.file(id+".png", pngBytes);
+    modTexDir.file(id+".png", pngBytes);
+
+    soundsDir.file(id+".ogg", oggBytes);
+    modSoundsDir.file(id+".ogg", oggBytes);
+    soundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
+    modSoundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
+
+    // give command
+    const nameComp = JSON.stringify({text:title});
+    const loreComp = JSON.stringify([{text:artist, italic:true, color:"gray"}]);
+    giveLines.push(
+      `give @s minecraft:music_disc_11[item_model="${namespace}:${id}",jukebox_playable={song:"${soundEventId}"},custom_name='${nameComp}',lore=[${loreComp.slice(1,-1)}]]`
+    );
+
+    // geyser custom item mapping (Geyser 2.x custom_mappings format)
+    geyserMappings.push({
+      name: `${namespace}_${id}`,
+      item: "minecraft:music_disc_11",
+      icon: `${namespace}_${id}`,
+      predicate: { property: "minecraft:custom_model_data", index: 0, fallback: false },
+      custom_model_data: id.length // placeholder distinguishing value; see README for matching real values
+    });
+
+    log(`  ✓ ${title} — ${artist} (${t.duration}s, comparator ${comparatorFor(t.duration)})`, "ok");
+    setProgress(5 + i/tracks.length*70);
+  }
+
+  rpNs.file("sounds.json", JSON.stringify(soundsJson, null, 2));
+  modAssetsNs.file("sounds.json", JSON.stringify(modSoundsJson, null, 2));
+  rpNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
+  modAssetsNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
+
+  fnDir.file("give_all.mcfunction", giveLines.join("\n")+"\n");
+  giveLines.forEach((line, idx) => fnDir.file(`give_${tracks[idx] ? tracks[idx].id : idx}.mcfunction`, line+"\n"));
+
+  // ---- fabric.mod.json ----
+  const fabricModJson = {
+    schemaVersion: 1,
+    id: namespace,
+    version: "1.0.0",
+    name: packName,
+    description: `Adds ${tracks.length} custom music disc(s), generated by Disc Press.`,
+    authors: ["Disc Press user"],
+    environment: "*",
+    license: "CC0-1.0",
+    depends: { fabricloader: ">=0.16.0", minecraft: "~26.2", "fabric-resource-loader-v0": "*" }
+  };
+  modResources.file("fabric.mod.json", JSON.stringify(fabricModJson, null, 2));
+
+  mod.file("build.gradle", buildGradle());
+  mod.file("settings.gradle", `pluginManagement {\n  repositories {\n    maven { url 'https://maven.fabricmc.net/' }\n    gradlePluginPortal()\n  }\n}\n`);
+  mod.file("gradle.properties", gradleProperties());
+  mod.file("README.md", modReadme(namespace));
+
+  // ---- geyser mapping ----
+  geyser.file("custom_items.json", JSON.stringify({
+    format_version: "1", identifier: "custom_items", items: { music_disc_11: geyserMappings.map(m=>({
+      name: m.name, custom_model_data: m.custom_model_data, icon: m.icon
+    })) }
+  }, null, 2));
+
+  zip.file("README.txt", topReadme(namespace, PACK_FORMAT));
+
+  setProgress(90);
+  log("Packing zip…");
+  const blob = await zip.generateAsync({type:"blob"}, (meta)=>{ setProgress(90 + meta.percent/10); });
+  setProgress(100);
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = namespace+"_disc_pack.zip";
+  document.body.appendChild(a); a.click(); a.remove();
+  log("Done — download started: "+namespace+"_disc_pack.zip", "ok");
+  genBtn.disabled = false;
+}
+
+function buildGradle(){
+return `plugins {
+\tid 'fabric-loom' version '1.7-SNAPSHOT'
+\tid 'maven-publish'
+}
+
+version = project.mod_version
+group = project.maven_group
+
+repositories {
+\tmavenCentral()
+}
+
+dependencies {
+\t// Check https://fabricmc.net/develop for the exact strings that match Minecraft 26.2
+\tminecraft "com.mojang:minecraft:\${project.minecraft_version}"
+\tmappings "net.fabricmc:yarn:\${project.yarn_mappings}:v2"
+\tmodImplementation "net.fabricmc:fabric-loader:\${project.loader_version}"
+\tmodImplementation "net.fabricmc.fabric-api:fabric-api:\${project.fabric_version}"
+}
+
+java {
+\twithSourcesJar()
+\tsourceCompatibility = JavaVersion.VERSION_21
+\ttargetCompatibility = JavaVersion.VERSION_21
+}
+
+processResources {
+\tinputs.property "version", project.version
+\tfilteringCharset "UTF-8"
+\tfilesMatching("fabric.mod.json") {
+\t\texpand "version": project.version
+\t}
+}
+`;
+}
+function gradleProperties(){
+return `# Fill these in from https://fabricmc.net/develop for Minecraft 26.2 —
+# they change frequently and are deliberately left as placeholders here.
+minecraft_version=26.2
+yarn_mappings=26.2+build.1
+loader_version=0.16.9
+fabric_version=0.100.0+26.2
+mod_version=1.0.0
+maven_group=com.discpress
+`;
+}
+function modReadme(namespace){
+return `# ${namespace} — Fabric music disc mod
+
+This is a plain resource+data bundle wrapped as a Fabric mod jar. There is
+no Java code: item textures/models, sound events, and jukebox_song entries
+under src/main/resources are picked up automatically by Minecraft the same
+way a resource pack + datapack would be, because mod jars are merged into
+both the resource and data systems.
+
+## Building
+
+1. Open gradle.properties and fill in the real yarn_mappings / loader_version /
+   fabric_version for Minecraft 26.2 from https://fabricmc.net/develop —
+   these are placeholders and change often, so they are not baked in.
+2. From this folder, run:
+       ./gradlew build          (Linux/macOS)
+       gradlew.bat build        (Windows)
+3. The built jar appears in build/libs/. Drop it into your .minecraft/mods
+   folder alongside Fabric Loader + Fabric API for 26.2.
+
+All compiling happens on your machine — nothing here is pre-built.
+`;
+}
+function topReadme(namespace, packFormat){
+return `Disc Press output
+==================
+
+Target version: Minecraft 26.2 (pack_format ${packFormat})
+
+Contents
+--------
+datapack/       - drop the CONTENTS of this folder into a world's
+                   .minecraft/saves/<world>/datapacks/${namespace}/ folder,
+                   or zip it and use as a datapack.
+resourcepack/    - same idea, goes in .minecraft/resourcepacks/, or zip it.
+fabric-mod/      - full Gradle project source. Run the build yourself
+                   (see fabric-mod/README.md) — nothing is precompiled.
+geyser/          - custom_items.json for Geyser's custom item mapping
+                   system, so Bedrock players via Geyser see correct icons.
+                   Geyser needs its own mapping regardless of the resource
+                   pack; see Geyser's docs for where to place this file and
+                   how to match the custom_model_data / icon fields to a
+                   texture you add to Geyser's packaged textures.
+
+Getting discs in-game
+----------------------
+Each track gets its own /give command in
+datapack/data/${namespace}/function/give_all.mcfunction — run it as
+/function ${namespace}:give_all (or the per-track functions) once the
+datapack is loaded.
+
+Notes on 26.2
+-------------
+26.2 uses the new item-component system: item_model, jukebox_playable,
+custom_name and lore are all set directly on the item stack via the give
+command rather than through legacy NBT tags. pack_format ${packFormat}
+matches the Java Edition 26.2 release; if Mojang ships a later 26.x drop
+before you use this, bump the pack_format value in both pack.mcmeta files
+to match (check the Minecraft Wiki's version page for the new number).
+
+Only the resourcepack and datapack are needed for a vanilla server/client
+combo. Use fabric-mod instead of (or alongside) them if you want the discs
+bundled as an actual mod, e.g. for a modded Fabric server.
+`;
+}
+
+genBtn.addEventListener("click", generateAll);
+
+/* preload template as soon as possible */
+loadTemplate();
+refreshEmpty();
+})();
+</script>
+</body>
+</html>
