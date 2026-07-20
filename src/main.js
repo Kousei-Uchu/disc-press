@@ -201,13 +201,15 @@ const data = ctx.getImageData(
                 for (let p = 0; p < n; p++) {
                     const i = p * 4;
                     const r = data.data[i], g = data.data[i + 1], b = data.data[i + 2], a = data.data[i + 3];
-                    const dRed = colorDist([r, g, b], REF_RED);
-                    const dYellow = colorDist([r, g, b], REF_YELLOW);
-                    const g0 = dRed <= dYellow ? 0 : 1;
-                    group[p] = g0;
-                    const lum = relLuminance(r, g, b);
-                    lumDelta[p] = lum - (g0 === 0 ? lumRed : lumYellow);
-                    alpha[p] = a;
+                    // Use brightness to separate disc base and ring
+const lum = relLuminance(r, g, b);
+
+group[p] = lum > 0.5 ? 1 : 0;
+
+const baseLum = group[p] === 0 ? lumRed : lumYellow;
+lumDelta[p] = lum - baseLum;
+
+alpha[p] = a;
                 }
 
                 console.log("Template size:", c.width, c.height);
