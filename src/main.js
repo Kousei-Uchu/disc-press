@@ -379,7 +379,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     </div>
     <div class="actions">
       <span class="status-chip ${t.status === 'ready' ? 'ok' : t.status === 'error' ? 'err' : 'busy'}">${t.status}</span>
-      <button class="btn-remove status-chip err" data-remove></button>
+      <button class="btn-remove status-chip err" data-remove>Remove</button>
     </div>
   `;
         const cnv = el.querySelector("canvas[data-src]");
