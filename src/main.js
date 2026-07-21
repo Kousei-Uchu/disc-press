@@ -366,8 +366,8 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     <div class="track-fields">
       <div class="filename">${t.file.name}</div>
       <div class="row">
-        <div><label>Title</label><input type="text" data-field="title" value="${t.title.replace(/"/g, '&quot;')}"></div>
-        <div><label>Artist</label><input type="text" data-field="artist" value="${t.artist.replace(/"/g, '&quot;')}"></div>
+        <div><label>Title</label><input class="recessed track-field-input" type="text" data-field="title" value="${t.title.replace(/"/g, '&quot;')}"></div>
+        <div><label>Artist</label><input class="recessed track-field-input" type="text" data-field="artist" value="${t.artist.replace(/"/g, '&quot;')}"></div>
       </div>
       ${t.colors ? `
       <div class="swatches">
