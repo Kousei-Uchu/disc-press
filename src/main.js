@@ -222,7 +222,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             for (let p = 0; p < w * h; p++) {
                 const i = p * 4;
                 const brightness = layer.data.data[i] / 255;
-                const alpha = layer.data.data[i + 3];
+                out.data[i + 3] = alpha > 128 ? 255 : 0;
                 if (alpha === 0) continue;
                 out.data[i] = color.r * brightness;
                 out.data[i + 1] = color.g * brightness;
