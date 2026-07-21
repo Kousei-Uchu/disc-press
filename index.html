@@ -67,18 +67,21 @@ h2{
   display:flex;align-items:center;gap:10px;
 }
 h2 .num{font-family:ui-monospace,monospace;font-size:.8rem;color:var(--amber-dim);border:1px solid var(--amber-dim);border-radius:50%;width:24px;height:24px;display:inline-flex;align-items:center;justify-content:center;flex:none}
+h2 .optional-tag{font-weight:400;font-size:.62em;color:var(--paper-dim);text-transform:none;letter-spacing:0;margin-left:2px}
 
 .panel{background:var(--bg-card);border:1px solid var(--line);border-radius:10px;padding:22px}
+.panel + .panel{margin-top:16px}
+.subhead{font-family:'Playfair Display',serif;color:var(--paper);font-size:1.02rem;margin-bottom:6px}
 
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px}
 @media (max-width:700px){.grid2{grid-template-columns:1fr}}
 
 label{display:block;font-size:.78rem;text-transform:uppercase;letter-spacing:.06em;color:var(--paper-dim);margin-bottom:6px}
-input[type=text]{
+input[type=text],select{
   width:100%;background:var(--bg-raised);border:1px solid var(--line);color:var(--paper);
   padding:10px 12px;border-radius:6px;font-family:inherit;font-size:.95rem;
 }
-input[type=text]:focus{outline:none;border-color:var(--amber-dim)}
+input[type=text]:focus,select:focus{outline:none;border-color:var(--amber-dim)}
 .hint{font-size:.78rem;color:var(--paper-dim);margin-top:6px;line-height:1.5}
 
 .dropzone{
@@ -168,6 +171,22 @@ button.ghost:hover{border-color:var(--amber-dim)}
 .footer-note code{background:var(--bg-raised);padding:1px 6px;border-radius:4px;font-size:.85em}
 a{color:var(--amber)}
 .empty{color:var(--paper-dim);font-size:.9rem;text-align:center;padding:20px 0}
+
+/* --- loot / recipe panels --- */
+.entry-list{display:flex;flex-direction:column;gap:8px;margin-top:14px}
+.entry-row{
+  display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap;
+  background:var(--bg-raised);border:1px solid var(--line);border-radius:8px;padding:10px 14px;
+}
+.entry-main{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:.88rem}
+.entry-main code{background:var(--bg-card);padding:1px 6px;border-radius:4px;font-size:.82em}
+.recipe-grid{
+  display:grid;grid-template-columns:repeat(3,1fr);gap:6px;margin-top:14px;max-width:340px;
+}
+.recipe-grid input{font-family:ui-monospace,monospace;font-size:.78rem;text-align:center;padding:10px 4px}
+.recipe-grid.shapeless input:nth-child(n+7){opacity:.55}
+label.checkbox-line{display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:.85rem;color:var(--paper);margin-top:14px}
+label.checkbox-line input{width:auto;margin:0}
 </style>
 </head>
 <body>
@@ -177,11 +196,11 @@ a{color:var(--amber)}
     <div class="spindle"></div>
     <div>
       <h1>Disc <em>Press</em></h1>
-      <div class="tagline">Turn any audio file into a fully working Minecraft music disc — datapack, resource pack, and a Fabric mod source you compile yourself. Everything runs in your browser; nothing is uploaded anywhere.</div>
+      <div class="tagline">Turn any audio file into a fully working Minecraft music disc — datapack, resource pack, Fabric mod source, loot table placements and crafting recipes. Everything runs in your browser; nothing is uploaded anywhere.</div>
       <div class="pill-row">
-        <span class="pill">Target: 26.2 (pack_format 107)</span>
+        <span class="pill">Target: 26.2 (data 107.1 / resource 88.0)</span>
         <span class="pill">Fabric-ready</span>
-        <span class="pill">Geyser mapping included</span>
+        <span class="pill">Geyser v2 mapping</span>
         <span class="pill">Local conversion only</span>
       </div>
     </div>
@@ -189,11 +208,11 @@ a{color:var(--amber)}
 
   <section>
     <h2><span class="num">1</span>Pack settings</h2>
-    <div class="panel grid2">
+    <div class="panel grid2" style="margin-top:0">
       <div>
         <label for="namespace">Namespace (lowercase, a–z0–9_)</label>
         <input type="text" id="namespace" value="customdiscs">
-        <div class="hint">Used everywhere internally: <code>data/&lt;namespace&gt;/…</code>, item ids, sound events.</div>
+        <div class="hint">Used everywhere internally: <code>data/&lt;namespace&gt;/…</code>, item ids, sound events, recipe/loot table ids.</div>
       </div>
       <div>
         <label for="packname">Pack display name</label>
@@ -221,7 +240,63 @@ a{color:var(--amber)}
   </section>
 
   <section>
-    <h2><span class="num">3</span>Forge the pack</h2>
+    <h2><span class="num">3</span>Loot tables &amp; crafting recipes <span class="optional-tag">(optional)</span></h2>
+
+    <div class="panel">
+      <div class="subhead">Add a disc to a loot table</div>
+      <div class="hint">
+        <strong>Standalone</strong> tables live under this pack's own namespace and are always safe to add — they're brand-new files and never overwrite anything.
+        <strong>Override</strong> writes directly to the exact path you give it (e.g. <code>minecraft:chests/village/village_weaponsmith</code>), which <strong>replaces that loot table file entirely</strong> — Disc Press has no way to know what else vanilla drops from that table, so only use it if you're prepared to merge the vanilla contents back in yourself afterward.
+      </div>
+      <div class="grid2">
+        <div><label for="lootTrackSelect">Track</label><select id="lootTrackSelect"></select></div>
+        <div><label for="lootMode">Table mode</label>
+          <select id="lootMode">
+            <option value="standalone">Standalone (safe, new table)</option>
+            <option value="override">Override existing path (destructive)</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid2">
+        <div><label for="lootTableId">Loot table path</label><input type="text" id="lootTableId" placeholder="e.g. stashes/disc_cache or chests/village/village_weaponsmith"></div>
+        <div><label for="lootTableType">Context type</label>
+          <select id="lootTableType">
+            <option value="generic">Generic</option>
+            <option value="chest">Chest</option>
+            <option value="entity">Entity</option>
+            <option value="block">Block</option>
+          </select>
+        </div>
+      </div>
+      <div class="grid2">
+        <div><label for="lootRolls">Rolls</label><input type="text" id="lootRolls" value="1"></div>
+        <div><label for="lootChance">Drop chance (0–1, blank = always)</label><input type="text" id="lootChance" placeholder="e.g. 0.15"></div>
+      </div>
+      <button class="ghost" id="addLootBtn" type="button" style="margin-top:14px">Add loot placement</button>
+      <div class="entry-list" id="lootList"></div>
+    </div>
+
+    <div class="panel">
+      <div class="subhead">Add a crafting recipe</div>
+      <div class="hint">Fill in item IDs (e.g. <code>minecraft:paper</code>) in the grid below. For a shaped recipe, position matters and blank cells stay empty; for shapeless, only the filled cells matter. Recipes live under this pack's own namespace, so they never conflict with anything vanilla.</div>
+      <div class="grid2">
+        <div><label for="recipeTrackSelect">Track</label><select id="recipeTrackSelect"></select></div>
+        <div><label for="recipeType">Recipe type</label>
+          <select id="recipeType">
+            <option value="shaped">Shaped (3×3 grid)</option>
+            <option value="shapeless">Shapeless (any arrangement)</option>
+          </select>
+        </div>
+      </div>
+      <div class="recipe-grid" id="recipeGrid"></div>
+      <label class="checkbox-line"><input type="checkbox" id="recipeAutoUnlock" checked> Unlock automatically for all players (via a small advancement)</label>
+      <button class="ghost" id="addRecipeBtn" type="button" style="margin-top:14px">Add recipe</button>
+      <div class="entry-list" id="recipeList"></div>
+    </div>
+  </section>
+
+  <section>
+    <h2><span class="num">4</span>Forge the pack</h2>
     <div class="panel">
       <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
         <button class="primary" id="generateBtn" disabled>Generate datapack + resource pack + Fabric mod</button>
@@ -256,10 +331,11 @@ a{color:var(--amber)}
   </div>
 
   <div class="footer-note">
-    <strong>Disc texture generator.</strong> On load, this page reads <code>./disc_template.png</code> (a 16×16 template) and classifies every pixel by hex-distance to pure red vs. pure yellow, records each pixel's luminance offset from that reference color, and records its alpha. Those three per-pixel arrays (group, luminance delta, alpha) are then replayed onto your chosen main / ring colors — group 0 pixels get the main color, group 1 pixels get the ring color, each re-lit by its stored luminance delta and masked by its stored alpha. Nothing about the disc's shading is hand-authored; it's all read out of the template.<br><br>
-    <strong>Colors</strong> are pulled from the embedded cover art (or the filename-derived art if none is embedded): the page buckets vivid pixels by hue, picks the most common hue as the main color and the next most common hue at least 40° away as the ring color, and only falls back to near-black/near-white if the art is genuinely achromatic.<br><br>
+    <strong>Disc texture generator.</strong> On load, this page reads two 16×16 split templates (<code>./disc_template_main.png</code>, <code>./disc_template_ring.png</code>) and replays your chosen main / ring colors onto each layer's stored brightness and alpha — group pixels get the main color, ring pixels get the ring color, each re-lit by its template brightness and masked by its own alpha. Nothing about the disc's shading is hand-authored; it's all read out of the templates.<br><br>
+    <strong>Colors</strong> are pulled from the embedded cover art (or deterministic art derived from the title/artist if none is embedded) using a small weighted k-means pass over a coarse color histogram, which is far more stable across muted or low-saturation art than a simple hue sort.<br><br>
+    <strong>Pack structure</strong> targets Minecraft 26.2 exactly: data pack format 107.1 and resource pack format 88.0, written using the current <code>min_format</code>/<code>max_format</code> pair syntax in <code>pack.mcmeta</code> (the single <code>pack_format</code> number was replaced by this since 25w31a). The <code>/give</code> commands use current item-component SNBT syntax throughout.<br><br>
     <strong>Compiling the Fabric mod</strong> is left to you on purpose — the zip includes a complete Gradle project; run <code>./gradlew build</code> yourself. This keeps everything, including the mod build, entirely on your machine.<br><br>
-    <strong>Geyser:</strong> a <code>geyser/custom_items.json</code> mapping file is included so Bedrock players connected through Geyser see the correct icon; drop it into your Geyser <code>custom_mappings</code> the way Geyser's docs describe, since Geyser needs its own item mapping regardless of your resource pack.
+    <strong>Geyser:</strong> the bundle includes a current-format (v2) <code>custom_mappings/&lt;namespace&gt;_discs.json</code> plus a minimal Bedrock resource pack with per-disc icon textures, so Bedrock players connected through Geyser see the correct name and icon rather than a fallback stone-sword-style item. See <code>geyser/README.md</code> in the output for setup steps.
   </div>
 </div>
 
