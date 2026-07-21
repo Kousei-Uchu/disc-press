@@ -301,6 +301,112 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         return canvas;
     }
 
+    /* ---------------- pack icon (pack.png) ---------------- */
+
+    // Deterministic little hash so a disc's rotation on the icon stays the
+    // same across re-generations of the same track list instead of jittering
+    // on every build (no Math.random() in here on purpose).
+    function iconHash(seed) {
+        let h = 0;
+        const s = String(seed);
+        for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
+        return h;
+    }
+
+    // Picks which tracks appear on the icon and in what role: the most
+    // saturated disc (by its main color) goes front-and-center as the
+    // largest disc, the rest form the surrounding ring. Always resolves to
+    // 6-8 total discs, cycling through available tracks (with repeats) if
+    // there aren't enough to fill the ring on their own.
+    function pickPackIconTracks(tracks) {
+        if (!tracks.length) return null;
+        const bySaturation = tracks.map(t => {
+            const c = (t.colors && t.colors.main) || { r: 150, g: 150, b: 150 };
+            const [, s] = rgbToHsl(c.r, c.g, c.b);
+            return { t, s };
+        }).sort((a, b) => b.s - a.s);
+
+        const center = bySaturation[0].t;
+        const others = tracks.filter(t => t !== center);
+        const surroundCount = others.length >= 7 ? 7 : Math.max(5, others.length);
+        const surround = [];
+        for (let i = 0; i < surroundCount; i++) {
+            surround.push(others.length ? others[i % others.length] : center);
+        }
+        return { center, surround };
+    }
+
+    // Renders the actual pack.png canvas from a {center, surround} pick.
+    // Disc art is drawn straight from each track's already-built texture
+    // canvas (t.canvas), so this only needs to run after every track's
+    // buildTexture() has completed.
+    function renderPackIconCanvas(pick) {
+        const { center, surround } = pick;
+        const SIZE = 256;
+        const canvas = document.createElement("canvas");
+        canvas.width = SIZE;
+        canvas.height = SIZE;
+        const ctx = canvas.getContext("2d");
+        const cx = SIZE / 2, cy = SIZE / 2;
+
+        // dark radial background
+        const bg = ctx.createRadialGradient(cx, cy, 0, cx, cy, SIZE * 0.72);
+        bg.addColorStop(0, "#3a3128");
+        bg.addColorStop(0.55, "#211b16");
+        bg.addColorStop(1, "#080706");
+        ctx.fillStyle = bg;
+        ctx.fillRect(0, 0, SIZE, SIZE);
+
+        function withShadow(fn) {
+            ctx.save();
+            ctx.shadowColor = "rgba(0,0,0,0.65)";
+            ctx.shadowBlur = 14;
+            ctx.shadowOffsetX = 0;
+            ctx.shadowOffsetY = 6;
+            fn();
+            ctx.restore();
+        }
+
+        function drawDisc(track, x, y, diameter, rotationDeg) {
+            const src = track.canvas;
+            if (!src) return;
+            withShadow(() => {
+                ctx.save();
+                ctx.translate(x, y);
+                ctx.rotate(rotationDeg * Math.PI / 180);
+                ctx.drawImage(src, -diameter / 2, -diameter / 2, diameter, diameter);
+                ctx.restore();
+            });
+        }
+
+        // surrounding discs, evenly spaced around the center, each nudged by
+        // a small deterministic rotation so the ring doesn't look
+        // mechanically identical
+        const ringRadius = SIZE * 0.30;
+        const surroundDiameter = SIZE * 0.34;
+        surround.forEach((t, i) => {
+            const angle = (i / surround.length) * Math.PI * 2 - Math.PI / 2;
+            const x = cx + Math.cos(angle) * ringRadius;
+            const y = cy + Math.sin(angle) * ringRadius;
+            const rotation = (iconHash(t.id + "_" + i) % 31) - 15; // ~-15deg .. +15deg
+            drawDisc(t, x, y, surroundDiameter, rotation);
+        });
+
+        // largest, most-saturated disc, centered and drawn on top of the ring
+        const centerDiameter = SIZE * 0.52;
+        const centerRotation = (iconHash(center.id) % 21) - 10; // ~-10deg .. +10deg
+        drawDisc(center, cx, cy, centerDiameter, centerRotation);
+
+        // subtle vignette
+        const vignette = ctx.createRadialGradient(cx, cy, SIZE * 0.35, cx, cy, SIZE * 0.72);
+        vignette.addColorStop(0, "rgba(0,0,0,0)");
+        vignette.addColorStop(1, "rgba(0,0,0,0.45)");
+        ctx.fillStyle = vignette;
+        ctx.fillRect(0, 0, SIZE, SIZE);
+
+        return canvas;
+    }
+
     /* ---------------- metadata ---------------- */
     function readTags(file) {
         return new Promise((resolve) => {
@@ -985,6 +1091,22 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             texture_data: geyserTextureEntries
         }, null, 2));
         geyser.file("README.md", geyserReadme(namespace));
+
+        // ---- pack.png, generated from the tracks' own disc textures ----
+        setProgress(92);
+        log("Building pack icon (pack.png)...");
+        try {
+            const iconPick = pickPackIconTracks(tracks);
+            if (iconPick) {
+                const iconCanvas = renderPackIconCanvas(iconPick);
+                const iconBytes = await canvasToPngBytes(iconCanvas);
+                dp.file("pack.png", iconBytes);
+                rp.file("pack.png", iconBytes);
+                log(`  done: pack.png (${1 + iconPick.surround.length} discs, center: ${iconPick.center.title})`, "ok");
+            }
+        } catch (e) {
+            log("  pack icon generation failed: " + e.message + " (continuing without pack.png)", "err");
+        }
 
         zip.file("README.txt", topReadme(namespace, DATA_PACK_FORMAT, RESOURCE_PACK_FORMAT, baseDiscItem));
 
