@@ -300,6 +300,10 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             if (tags.title) track.title = tags.title;
             if (tags.artist) track.artist = tags.artist;
 
+            if (tags.title && tags.artist) {
+                track.id = uniqueId(slugify(track.title. + "_" + track.artist), usedIds);
+            }
+
             let imgData = null;
             if (tags.picture) {
                 const { data, format } = tags.picture;
@@ -711,15 +715,13 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         });
     }
 
-    /* The set of item-component overrides that make base music_disc_11 into this
+    /* The set of item-component overrides that make base music_disc_pigstep into this
        specific custom disc. Shared by the /give command, loot table set_components
        function, and recipe result — so all three ways of obtaining a disc agree. */
     function discComponents(t, namespace) {
         return {
             item_model: `${namespace}:${t.id}`,
-            jukebox_playable: `${namespace}:${t.id}`,
-            custom_name: { text: t.title || "Unknown Title" },
-            lore: [{ text: t.artist || "Unknown Artist", italic: true, color: "gray" }]
+            jukebox_playable: `${namespace}:${t.id}`
         };
     }
 
@@ -732,7 +734,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         };
         const itemEntry = {
             type: "minecraft:item",
-            name: "minecraft:music_disc_11",
+            name: "minecraft:music_disc_pigstep",
             functions: [
                 { function: "minecraft:set_components", components, mode: "merge" }
             ]
@@ -747,7 +749,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     }
 
     function buildRecipeJson(recipe, components) {
-        const result = { id: "minecraft:music_disc_11", count: 1, components };
+        const result = { id: "minecraft:music_disc_pigstep", count: 1, components };
         if (recipe.kind === "shapeless") {
             return {
                 type: "minecraft:crafting_shapeless",
@@ -883,7 +885,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             const artist = t.artist || "Unknown Artist";
             const soundEventId = `${namespace}:${id}`;
             const langKey = `jukebox_song.${namespace}.${id}`;
-            langEntries[langKey] = `${title} - ${artist}`;
+            langEntries[langKey] = `${artist} - ${title}`;
 
             // datapack: jukebox_song
             const jukeboxJson = {
@@ -912,7 +914,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
 
             soundsDir.file(id + ".ogg", oggBytes);
             modSoundsDir.file(id + ".ogg", oggBytes);
-            soundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
+            soundsJson[id] = { sounds: [`${namespace}:records/${id}`], subtitle: langKey };
             modSoundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
 
             // give command — item components are parsed as SNBT, not JSON. custom_name
@@ -922,7 +924,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             const nameComp = `{text:${snbtStr(title)}}`;
             const loreComp = `[{text:${snbtStr(artist)},italic:true,color:"gray"}]`;
             giveLines.push(
-                `give @s minecraft:music_disc_11[item_model="${namespace}:${id}",jukebox_playable="${soundEventId}",custom_name=${nameComp},lore=${loreComp}]`
+                `give @s minecraft:music_disc_pigstep[item_model="${namespace}:${id}",jukebox_playable="${soundEventId}"]`
             );
 
             // Geyser v2 custom item definition — maps the item_model value above to a
@@ -934,7 +936,6 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
                 type: "definition",
                 model: `${namespace}:${id}`,
                 bedrock_identifier: bedrockId,
-                display_name: `${title} - ${artist}`,
                 bedrock_options: {
                     icon: bedrockId,
                     // Bedrock only shows recipes for custom items in the recipe book
@@ -1028,7 +1029,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         setProgress(80);
         geyserMappingsDir.file(namespace + "_discs.json", JSON.stringify({
             format_version: 2,
-            items: { "minecraft:music_disc_11": geyserItems }
+            items: { "minecraft:music_disc_pigstep": geyserItems }
         }, null, 2));
 
         const rpUuid1 = cryptoRandomUUID(), rpUuid2 = cryptoRandomUUID();
