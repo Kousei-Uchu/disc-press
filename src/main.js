@@ -177,14 +177,30 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     }
 
     /* ---------------- disc template reader ---------------- */
-    let TEMPLATE = null; // {w,h,main,ring}
+    let TEMPLATE = null; // {w,h,main:{alpha,multiplier},ring:{alpha,multiplier}}
+
+    // How strongly highlights (multiplier > 1) punch through on top of the
+    // multiplicative shading, in 0-255 units. This is what keeps black discs from
+    // going flat: shadows (multiplier < 1) still crush toward the base color, but
+    // raised/highlighted areas get an additive kick regardless of how dark the
+    // base color is.
+    const HIGHLIGHT_STRENGTH = 90;
+    // Excess above the average (multiplier - 1) is clamped to this before being
+    // scaled by HIGHLIGHT_STRENGTH, so a few blown-out template pixels can't
+    // produce absurdly large additive spikes.
+    const HIGHLIGHT_EXCESS_CAP = 1.0;
 
     function loadTemplate() {
         return Promise.all([
             loadImageData("./disc_template_main.png"),
             loadImageData("./disc_template_ring.png")
         ]).then(([main, ring]) => {
-            TEMPLATE = { w: main.width, h: main.height, main, ring };
+            TEMPLATE = {
+                w: main.width,
+                h: main.height,
+                main: computeLightingLayer(main),
+                ring: computeLightingLayer(ring)
+            };
             log("Loaded disc templates", "ok");
         });
     }
@@ -208,6 +224,44 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         });
     }
 
+    /* Converts a raw template layer (grayscale-ish RGB + alpha) into a precomputed
+       relative lighting map: for every opaque pixel, luminance / averageLuminance.
+       This is computed once per template load, not per disc, since it never
+       changes across builds.
+       - multiplier ~1   -> average-lit surface, base color passes through as-is
+       - multiplier <1   -> shadow, pulls toward black
+       - multiplier >1   -> highlight, both brightens via the multiply and
+                            contributes to the additive highlight term in buildTexture */
+    function computeLightingLayer(layer) {
+        const { width: w, height: h, data: imgData } = layer;
+        const px = imgData.data;
+        const n = w * h;
+        const alpha = new Uint8Array(n);
+        const lum = new Float32Array(n);
+        let total = 0, count = 0;
+
+        for (let p = 0; p < n; p++) {
+            const i = p * 4;
+            const opaque = px[i + 3] > 127;
+            alpha[p] = opaque ? 1 : 0;
+            if (!opaque) continue;
+            const l = relLuminance(px[i], px[i + 1], px[i + 2]);
+            lum[p] = l;
+            total += l;
+            count++;
+        }
+
+        const avgLum = count > 0 ? total / count : 0.5;
+        const multiplier = new Float32Array(n);
+        for (let p = 0; p < n; p++) {
+            if (!alpha[p]) { multiplier[p] = 0; continue; }
+            // avgLum guarded against 0 (fully black template layer) to avoid NaN/Infinity
+            multiplier[p] = avgLum > 0 ? lum[p] / avgLum : 1;
+        }
+
+        return { w, h, alpha, multiplier };
+    }
+
     function buildTexture(mainColor, ringColor) {
         const { w, h, main, ring } = TEMPLATE;
         const canvas = document.createElement("canvas");
@@ -216,20 +270,28 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         const ctx = canvas.getContext("2d");
         const out = ctx.createImageData(w, h);
 
-        // Alpha is clamped to fully opaque (255) or fully transparent (0), no
-        // partial/antialiased edge pixels, so template edges stay crisp instead of
-        // blending toward black at low opacity.
+        function clamp255(v) { return v < 0 ? 0 : v > 255 ? 255 : v; }
+
+        // Applies one layer using its precomputed relative-lighting multiplier
+        // instead of the template's absolute RGB brightness. base color is
+        // preserved at multiplier ~1 (so white stays white, saturated colors stay
+        // saturated); shadows darken it multiplicatively; highlights both brighten
+        // it multiplicatively AND add a small additive term so very dark base
+        // colors (e.g. black) still show curvature/highlight detail instead of
+        // going completely flat.
         function applyLayer(layer, color) {
+            const { alpha, multiplier } = layer;
             for (let p = 0; p < w * h; p++) {
                 const i = p * 4;
-                const brightness = layer.data.data[i] / 255;
-                const rawAlpha = layer.data.data[i + 3];
-                const alpha = rawAlpha > 127 ? 255 : 0;
-                if (alpha === 0) continue;
-                out.data[i] = color.r * brightness;
-                out.data[i + 1] = color.g * brightness;
-                out.data[i + 2] = color.b * brightness;
-                out.data[i + 3] = Math.max(out.data[i + 3], alpha);
+                if (!alpha[p]) continue;
+                const m = multiplier[p];
+                const excess = Math.min(Math.max(m - 1, 0), HIGHLIGHT_EXCESS_CAP);
+                const highlight = excess * HIGHLIGHT_STRENGTH;
+
+                out.data[i] = clamp255(color.r * m + highlight);
+                out.data[i + 1] = clamp255(color.g * m + highlight);
+                out.data[i + 2] = clamp255(color.b * m + highlight);
+                out.data[i + 3] = Math.max(out.data[i + 3], 255);
             }
         }
 
