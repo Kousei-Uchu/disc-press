@@ -3,7 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Disc Press — Custom Music Disc Forge for Minecraft 26.2</title>
+<title>Disc Press</title>
+<meta name="description" content="Turn audio files into playable Minecraft music discs. Datapack, resource pack and Geyser mapping, generated in the browser.">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/jsmediatags@3.9.7/dist/jsmediatags.min.js"></script>
 <style>
@@ -25,25 +26,40 @@
 html,body{margin:0;padding:0}
 body{
   background:
-    radial-gradient(1200px 600px at 15% -10%, rgba(226,165,58,0.06), transparent 60%),
-    radial-gradient(1000px 500px at 100% 10%, rgba(194,84,44,0.05), transparent 55%),
+    radial-gradient(1200px 600px at 15% -10%, rgba(226,165,58,0.05), transparent 60%),
+    radial-gradient(1000px 500px at 100% 10%, rgba(194,84,44,0.04), transparent 55%),
     var(--bg);
   color:var(--paper);
   font-family:'Iowan Old Style','Georgia',ui-serif,serif;
   min-height:100vh;
 }
-.wrap{max-width:1080px;margin:0 auto;padding:48px 24px 120px}
-header.hero{display:flex;align-items:flex-end;gap:28px;margin-bottom:8px;flex-wrap:wrap}
-.spindle{
-  width:78px;height:78px;border-radius:50%;flex:none;
+
+.topbar{
+  position:sticky;top:0;z-index:40;
+  display:flex;align-items:center;justify-content:space-between;
+  padding:16px 24px;border-bottom:1px solid var(--line);
+  background:rgba(18,16,14,.86);backdrop-filter:blur(10px);
+}
+.topbar .brand{display:flex;align-items:center;gap:10px}
+.topbar .disc-mark{
+  width:22px;height:22px;border-radius:50%;flex:none;
   background: var(--groove), radial-gradient(circle at 35% 30%, #3a2f22, #171310 70%);
   border:1px solid var(--line);
-  position:relative;
-  animation:spin 9s linear infinite;
-  box-shadow:0 0 0 1px #000 inset, 0 10px 30px rgba(0,0,0,.5);
 }
-.spindle::after{content:"";position:absolute;inset:34%;border-radius:50%;background:var(--amber);box-shadow:0 0 20px rgba(226,165,58,.5)}
-@keyframes spin{to{transform:rotate(360deg)}}
+.topbar .brand-name{font-family:'Playfair Display',serif;font-size:1.02rem;letter-spacing:.01em;color:var(--paper)}
+.topbar .brand-name em{color:var(--amber);font-style:normal}
+.topbar nav{display:flex;align-items:center;gap:18px}
+.topbar a.gh{
+  display:flex;align-items:center;gap:7px;color:var(--paper-dim);text-decoration:none;
+  font-size:.86rem;border:1px solid var(--line);padding:7px 13px;border-radius:8px;
+  transition:border-color .15s, color .15s;
+}
+.topbar a.gh:hover{border-color:var(--amber-dim);color:var(--paper)}
+.topbar a.gh svg{width:16px;height:16px;flex:none}
+
+.wrap{max-width:1080px;margin:0 auto;padding:56px 24px 90px}
+
+header.hero{margin-bottom:8px}
 h1{
   font-family:'Playfair Display', 'Iowan Old Style', serif;
   font-size:clamp(2.1rem,4vw,3.1rem);
@@ -54,7 +70,7 @@ h1{
 }
 h1 em{color:var(--amber);font-style:normal}
 .tagline{color:var(--paper-dim);font-size:1.02rem;max-width:56ch;margin-top:10px;line-height:1.55}
-.pill-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:18px}
+.pill-row{display:flex;gap:8px;flex-wrap:wrap;margin-top:20px}
 .pill{
   font-family:ui-monospace,'SF Mono',Menlo,monospace;font-size:.72rem;letter-spacing:.04em;
   border:1px solid var(--line);color:var(--paper-dim);padding:5px 10px;border-radius:100px;
@@ -166,103 +182,96 @@ button.ghost:hover{border-color:var(--amber-dim)}
 .log .err{color:var(--err)}
 .log .ok{color:var(--ok)}
 
-.footer-note{margin-top:60px;font-size:.82rem;color:var(--paper-dim);line-height:1.7;border-top:1px solid var(--line);padding-top:22px}
-.footer-note code{background:var(--bg-raised);padding:1px 6px;border-radius:4px;font-size:.85em}
-a{color:var(--amber)}
 .empty{color:var(--paper-dim);font-size:.9rem;text-align:center;padding:20px 0}
 
 label.checkbox-line{display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-size:.85rem;color:var(--paper);margin-top:14px}
 label.checkbox-line input{width:auto;margin:0}
+
+footer.site{
+  border-top:1px solid var(--line);margin-top:70px;padding:26px 24px 40px;
+  display:flex;align-items:center;justify-content:center;gap:8px;
+  font-size:.8rem;color:var(--paper-dim);
+}
+footer.site a{color:var(--paper-dim);text-decoration:none;border-bottom:1px solid var(--line);padding-bottom:1px}
+footer.site a:hover{color:var(--amber);border-color:var(--amber-dim)}
 </style>
 </head>
 <body>
-<div class="wrap">
 
-  <header class="hero">
-    <div class="spindle"></div>
-    <div>
+  <div class="topbar">
+    <div class="brand">
+      <div class="disc-mark"></div>
+      <span class="brand-name">Disc <em>Press</em></span>
+    </div>
+    <nav>
+      <a class="gh" href="https://github.com/your-username/disc-press" target="_blank" rel="noopener">
+        <svg viewBox="0 0 16 16" fill="currentColor" aria-hidden="true"><path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.01 8.01 0 0 0 16 8c0-4.42-3.58-8-8-8Z"/></svg>
+        GitHub
+      </a>
+    </nav>
+  </div>
+
+  <div class="wrap">
+
+    <header class="hero">
       <h1>Disc <em>Press</em></h1>
-      <div class="tagline">Turn any audio file into a fully working Minecraft music disc — datapack, resource pack, Fabric mod source, a blank-disc librarian trade and stonecutter recipes. Everything runs in your browser; nothing is uploaded anywhere.</div>
+      <div class="tagline">Turn your own audio files into playable Minecraft music discs. Everything runs locally in your browser, nothing is uploaded anywhere.</div>
       <div class="pill-row">
-        <span class="pill">Target: 26.2 (data 107.1 / resource 88.0)</span>
-        <span class="pill">Fabric-ready</span>
+        <span class="pill">Minecraft 26.2</span>
+        <span class="pill">Data pack 107.1</span>
+        <span class="pill">Resource pack 88.0</span>
         <span class="pill">Geyser v2 mapping</span>
-        <span class="pill">Local conversion only</span>
       </div>
-    </div>
-  </header>
+    </header>
 
-  <section>
-    <h2><span class="num">1</span>Pack settings</h2>
-    <div class="panel grid2" style="margin-top:0">
-      <div>
-        <label for="namespace">Namespace (lowercase, a–z0–9_)</label>
-        <input type="text" id="namespace" value="customdiscs">
-        <div class="hint">Used everywhere internally: <code>data/&lt;namespace&gt;/…</code>, item ids, sound events, recipe/trade ids.</div>
+    <section>
+      <h2><span class="num">1</span>Pack settings</h2>
+      <div class="panel grid2" style="margin-top:0">
+        <div>
+          <label for="namespace">Namespace (lowercase, a-z0-9_)</label>
+          <input type="text" id="namespace" value="customdiscs">
+          <div class="hint">Used internally for item ids, sound events and recipe ids: <code>data/&lt;namespace&gt;/...</code></div>
+        </div>
+        <div>
+          <label for="packname">Pack display name</label>
+          <input type="text" id="packname" value="Custom Discs">
+          <div class="hint">Shown in the resource pack and datapack list.</div>
+        </div>
       </div>
-      <div>
-        <label for="packname">Pack display name</label>
-        <input type="text" id="packname" value="Custom Discs">
-        <div class="hint">Shown in the resource pack / datapack list and used as the mod name.</div>
-      </div>
-    </div>
-  </section>
+    </section>
 
-  <section>
-    <h2><span class="num">2</span>Add tracks</h2>
-    <div class="panel">
-      <div class="dropzone" id="dropzone">
-        <div class="big">Drop audio files here, or click to browse</div>
-        <div class="small">Any format — mp3, wav, flac, m4a, aac, opus, ogg… all converted to OGG Vorbis on your machine.</div>
+    <section>
+      <h2><span class="num">2</span>Add tracks</h2>
+      <div class="panel">
+        <div class="dropzone" id="dropzone">
+          <div class="big">Drop audio files here, or click to browse</div>
+          <div class="small">Any format works. mp3, wav, flac, m4a, aac, opus, ogg and more, all converted to OGG Vorbis on your machine.</div>
+        </div>
+        <input type="file" id="fileInput" multiple accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.opus,.ogg,.wma,.aiff" style="display:none">
+        <div class="hint" id="pickerFallback" style="margin-top:10px;display:none">
+          Your browser blocked the automatic file picker. Use this button instead:
+          <button class="ghost" id="fallbackPickBtn" type="button">Choose audio files</button>
+        </div>
+        <div class="tracks" id="tracks"></div>
+        <div class="empty" id="emptyMsg">No tracks added yet.</div>
       </div>
-      <input type="file" id="fileInput" multiple accept="audio/*,.mp3,.wav,.flac,.m4a,.aac,.opus,.ogg,.wma,.aiff" style="display:none">
-      <div class="hint" id="pickerFallback" style="margin-top:10px;display:none">
-        Your browser blocked the automatic file picker. Use this button instead:
-        <button class="ghost" id="fallbackPickBtn" type="button">Choose audio files</button>
-      </div>
-      <div class="tracks" id="tracks"></div>
-      <div class="empty" id="emptyMsg">No tracks added yet.</div>
-    </div>
-  </section>
+    </section>
 
-  <!-- <section>
-    <h2><span class="num">3</span>Getting discs in survival</h2>
-    <div class="panel">
-      <div class="subhead">Blank disc → stonecutter</div>
-      <div class="hint">
-        Trade <strong>16 emeralds + 1 amethyst shard</strong> with a <strong>level 5 (master) librarian</strong> for a <strong>blank disc</strong> — a reskinned Knowledge Book with an all-white label and no jukebox function of its own. Put it in a <strong>stonecutter</strong> to turn it into any of your custom discs.
+    <section>
+      <h2><span class="num">3</span>Forge the pack</h2>
+      <div class="panel">
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+          <button class="primary" id="generateBtn" disabled>Generate datapack and resource pack</button>
+          <span class="hint" id="genHint">Add at least one track to enable this.</span>
+        </div>
+        <div class="progress-wrap" id="progressWrap" style="display:none">
+          <div class="bar"><div id="progressBar"></div></div>
+          <div class="log" id="log"></div>
+        </div>
       </div>
-      <div style="margin-top:14px">
-        <label for="baseDiscItem">Base vanilla disc item (for the real, playable discs)</label>
-        <select id="baseDiscItem">
-          <option value="minecraft:music_disc_5">Music Disc 5</option>
-          <option value="minecraft:music_disc_otherside">Otherside</option>
-          <option value="minecraft:music_disc_pigstep selected">Pigstep</option>
-          <option value="minecraft:music_disc_11">11</option>
-          <option value="minecraft:music_disc_13">13</option>
-          <option value="minecraft:music_disc_cat">Cat</option>
-        </select>
-        <div class="hint">Every custom track is this vanilla disc with its name, model, and sound swapped out via item components.</div>
-      </div>
-      <div class="hint" style="margin-top:14px">
-        The blank disc is built on <code>minecraft:knowledge_book</code> instead of a music disc on purpose: knowledge books have no natural source in survival and aren't in the creative menu, so the stonecutter recipe (<code>knowledge_book → your disc</code>) can only ever be triggered by the blank disc this pack hands out. There's no disc → blank conversion, so the playable discs themselves never have to double as a stonecutter ingredient.
-      </div>
-    </div>
-  </section> -->
+    </section>
 
-  <section>
-    <h2><span class="num">3</span>Forge the pack</h2>
-    <div class="panel">
-      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
-        <button class="primary" id="generateBtn" disabled>Generate datapack + resource pack + Fabric mod</button>
-        <span class="hint" id="genHint">Add at least one track to enable this.</span>
-      </div>
-      <div class="progress-wrap" id="progressWrap" style="display:none">
-        <div class="bar"><div id="progressBar"></div></div>
-        <div class="log" id="log"></div>
-      </div>
-    </div>
-  </section>
+  </div>
 
   <div class="modal-overlay" id="colorModal">
     <div class="modal-panel">
@@ -285,14 +294,10 @@ label.checkbox-line input{width:auto;margin:0}
     </div>
   </div>
 
-  <div class="footer-note">
-    <strong>Disc texture generator.</strong> On load, this page reads two 16×16 split templates (<code>./disc_template_main.png</code>, <code>./disc_template_ring.png</code>) and replays your chosen main / ring colors onto each layer's stored brightness and alpha — group pixels get the main color, ring pixels get the ring color, each re-lit by its template brightness and masked by its own alpha, clamped to fully opaque or fully transparent (no half-transparent edge blending). Nothing about the disc's shading is hand-authored; it's all read out of the templates.<br><br>
-    <strong>Colors</strong> are pulled from the embedded cover art (or deterministic art derived from the title/artist if none is embedded) using a small weighted k-means pass over a coarse color histogram, which is far more stable across muted or low-saturation art than a simple hue sort.<br><br>
-    <strong>Pack structure</strong> targets Minecraft 26.2 exactly: data pack format 107.1 and resource pack format 88.0, written using the current <code>min_format</code>/<code>max_format</code> pair syntax in <code>pack.mcmeta</code> (the single <code>pack_format</code> number was replaced by this since 25w31a). The <code>/give</code> commands use current item-component SNBT syntax throughout.<br><br>
-    <strong>Compiling the Fabric mod</strong> is left to you on purpose — the zip includes a complete Gradle project; run <code>./gradlew build</code> yourself. This keeps everything, including the mod build, entirely on your machine.<br><br>
-    <strong>Geyser:</strong> the bundle includes a current-format (v2) <code>custom_mappings/&lt;namespace&gt;_discs.json</code> plus a minimal Bedrock resource pack with per-disc icon textures, so Bedrock players connected through Geyser see the correct name and icon rather than a fallback stone-sword-style item. See <code>geyser/README.md</code> in the output for setup steps.
-  </div>
-</div>
+  <footer class="site">
+    <span>Disc Press is open source.</span>
+    <a href="https://github.com/your-username/disc-press" target="_blank" rel="noopener">View it on GitHub</a>
+  </footer>
 
 <script type="module" src="./src/main.js"></script>
 </body>
