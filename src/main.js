@@ -5,6 +5,11 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
 
 (async () => {
 
+    /* Set this to true to bring back the Fabric mod build (fabric-mod/ folder in the
+       zip, fabric.mod.json, build.gradle, the works). It's fully wired up below,
+       just switched off for now. */
+    const INCLUDE_FABRIC_MOD = false;
+
     /* ---------------- utility ---------------- */
     const $ = (s) => document.querySelector(s);
     const logEl = $("#log"), progWrap = $("#progressWrap"), progBar = $("#progressBar");
@@ -25,8 +30,8 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         return id;
     }
 
-    /* Sanitizes a resource-location PATH (the part after the colon) — keeps
-       slashes (for nested folders like chests/village/foo) but strips anything
+    /* Sanitizes a resource-location path (the part after the colon). Keeps
+       slashes for nested folders like chests/village/foo but strips anything
        the game won't accept in a namespaced path. */
     function sanitizeResourcePath(p) {
         return (p || "").trim().toLowerCase()
@@ -38,11 +43,11 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         return (n || "").trim().toLowerCase().replace(/[^a-z0-9_.-]/g, "_") || "minecraft";
     }
 
-    /* Escapes a JS string into a double-quoted SNBT string literal, e.g. for use
-       inside a /give command's item component brackets: custom_name={text:"..."} .
-       This is NOT JSON.stringify — commands are parsed as SNBT, not JSON, and
-       (critically) the value must NOT be wrapped in an extra pair of quotes or it
-       becomes a literal string instead of a parsed text component. */
+    /* Escapes a JS string into a double-quoted SNBT string literal, for use inside a
+       /give command's item component brackets: custom_name={text:"..."}. This is not
+       JSON.stringify. Commands are parsed as SNBT, not JSON, and the value must not
+       be wrapped in an extra pair of quotes or it becomes a literal string instead of
+       a parsed text component. */
     function snbtStr(s) {
         return '"' + String(s == null ? "" : s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
     }
@@ -79,13 +84,13 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     }
     function toHex(r, g, b) { return "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join(""); }
 
-    /* Extract two perceptually distinct colors from cover-art image data.
-       Approach: build a weighted color histogram (coarse RGB buckets so near-identical
-       pixels merge), seed two cluster centers as the heaviest bucket and the bucket
-       farthest from it among the heaviest candidates, then refine both centers with
-       a few passes of weighted k-means over the histogram (cheap — bins, not pixels).
-       This is far more stable than sorting by hue, since hue is undefined/noisy for
-       low-saturation pixels and was the main source of erratic picks before. */
+    /* Extracts two perceptually distinct colors from cover art image data.
+       Builds a weighted color histogram (coarse RGB buckets so near-identical pixels
+       merge), seeds two cluster centers as the heaviest bucket and the bucket
+       farthest from it among the heaviest candidates, then refines both centers with
+       a few passes of weighted k-means over the histogram (cheap, since it works on
+       bins rather than pixels). This holds up much better than sorting by hue, since
+       hue is undefined or noisy for low-saturation pixels. */
     function extractTwoColors(imgData) {
         const data = imgData.data;
         const hist = new Map();
@@ -180,7 +185,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             loadImageData("./disc_template_ring.png")
         ]).then(([main, ring]) => {
             TEMPLATE = { w: main.width, h: main.height, main, ring };
-            log("Loaded split disc templates", "ok");
+            log("Loaded disc templates", "ok");
         });
     }
 
@@ -211,9 +216,9 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         const ctx = canvas.getContext("2d");
         const out = ctx.createImageData(w, h);
 
-        // Alpha is clamped to fully opaque (255) or fully transparent (0) — no
-        // partial/antialiased edge pixels — so template edges stay crisp instead
-        // of blending toward black at low opacity.
+        // Alpha is clamped to fully opaque (255) or fully transparent (0), no
+        // partial/antialiased edge pixels, so template edges stay crisp instead of
+        // blending toward black at low opacity.
         function applyLayer(layer, color) {
             for (let p = 0; p < w * h; p++) {
                 const i = p * 4;
@@ -247,7 +252,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
 
     /* ---------------- state ---------------- */
     const tracks = []; // {id, file, title, artist, cover(dataURL|null), colors, canvas, oggBlob, duration, status}
-    const usedIds = new Set(["blank_disc"]); // reserved — never let a track collide with the blank disc's id
+    const usedIds = new Set(["blank_disc"]); // reserved, never let a track collide with the blank disc's id
     const usedResourceIds = new Set(); // recipe / advancement ids within the project namespace
 
     const tracksEl = $("#tracks"), emptyMsg = $("#emptyMsg"), genBtn = $("#generateBtn"), genHint = $("#genHint");
@@ -304,13 +309,13 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             track.canvas = buildTexture(track.colors.main, track.colors.ring);
             track.status = "ready";
         } catch (err) {
-            // Metadata/color/texture step failed — the track stays in the list with sane
-            // fallbacks so you can still fix title/artist/colors by hand and continue.
+            // Metadata/color/texture step failed. The track stays in the list with sane
+            // fallbacks so it can still be fixed by hand and the build can continue.
             track.status = "error";
             track.error = err.message;
             track.colors = track.colors || extractTwoColors(fauxImageDataFromString(track.title + track.artist));
             track.canvas = track.canvas || buildTexture(track.colors.main, track.colors.ring);
-            log("Problem reading " + file.name + ": " + err.message + " (using fallback title/colors — edit by hand)", "err");
+            log("Problem reading " + file.name + ": " + err.message + " (using fallback title/colors, edit by hand)", "err");
             console.error(err);
         }
         renderTrack(track);
@@ -356,7 +361,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         const previewCanvas = t.canvas ? t.canvas.toDataURL() : null;
         el.innerHTML = `
     <div class="disc-preview">
-      ${previewCanvas ? `<canvas width="16" height="16" style="width:80px;height:80px;image-rendering:pixelated;border-radius:50%;box-shadow:0 6px 18px rgba(0,0,0,.5);" data-src="${previewCanvas}"></canvas>` : `<div style="width:80px;height:80px;border-radius:50%;background:#332c26;display:flex;align-items:center;justify-content:center;font-size:.7rem;color:var(--paper-dim)">…</div>`}
+      ${previewCanvas ? `<canvas width="16" height="16" style="width:80px;height:80px;image-rendering:pixelated;border-radius:50%;box-shadow:0 6px 18px rgba(0,0,0,.5);" data-src="${previewCanvas}"></canvas>` : `<div style="width:80px;height:80px;border-radius:50%;background:#332c26;display:flex;align-items:center;justify-content:center;font-size:.7rem;color:var(--paper-dim)">...</div>`}
     </div>
     <div class="track-fields">
       <div class="filename">${t.file.name}</div>
@@ -370,7 +375,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         <div class="swatch" data-color="main" style="background:${toHex(t.colors.main.r, t.colors.main.g, t.colors.main.b)}" title="Click to change"></div>
         <span class="swatch-label">ring</span>
         <div class="swatch" data-color="ring" style="background:${toHex(t.colors.ring.r, t.colors.ring.g, t.colors.ring.b)}" title="Click to change"></div>
-      </div>` : `<div class="hint">Extracting colors…</div>`}
+      </div>` : `<div class="hint">Extracting colors...</div>`}
     </div>
     <div class="actions">
       <span class="status-chip ${t.status === 'ready' ? 'ok' : t.status === 'error' ? 'err' : 'busy'}">${t.status}</span>
@@ -417,7 +422,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
 
     function openColorModal(track, key) {
         colorModalTarget = { track, key };
-        colorModalTitle.textContent = (key === "main" ? "Main disc color" : "Ring label color") + " — " + track.title;
+        colorModalTitle.textContent = (key === "main" ? "Main disc color" : "Ring label color") + " - " + track.title;
 
         const ctx = colorModalCanvas.getContext("2d");
         ctx.clearRect(0, 0, colorModalCanvas.width, colorModalCanvas.height);
@@ -582,9 +587,9 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         });
     }
 
-    /* The set of item-component overrides that make the base disc item into this
+    /* The set of item component overrides that make the base disc item into this
        specific custom disc. Shared by the /give command, the stonecutting recipe
-       result, and the villager-trade sell item — so every way of obtaining a disc
+       result, and the villager trade sell item, so every way of obtaining a disc
        agrees on what it looks like and sounds like. */
     function discComponents(t, namespace) {
         return {
@@ -625,17 +630,22 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         progWrap.style.display = "block";
         logEl.innerHTML = "";
         setProgress(2);
-        log("Starting build for " + tracks.length + " track(s), namespace \"" + namespace + "\"…");
-        log(`Targeting Minecraft 26.2 — data pack format ${DATA_PACK_FORMAT.join(".")}, resource pack format ${RESOURCE_PACK_FORMAT.join(".")}.`);
+        log("Starting build for " + tracks.length + " track(s), namespace \"" + namespace + "\"...");
+        log(`Targeting Minecraft 26.2, data pack format ${DATA_PACK_FORMAT.join(".")}, resource pack format ${RESOURCE_PACK_FORMAT.join(".")}.`);
 
         const zip = new JSZip();
         const tldp = zip.folder("datapack");
         const tlrp = zip.folder("resourcepack");
-        const tlmod = zip.folder("fabric-mod");
         const dp = tldp.folder(packName);
-        const rp = tlrp.folder(packname);
-        const mod = tlmod.folder(packname);
+        const rp = tlrp.folder(packName);
         const geyser = zip.folder("geyser");
+
+        // fabric-mod is only assembled when INCLUDE_FABRIC_MOD is switched on above.
+        let tlmod, mod, modResources, modAssetsNs, modItemsDir, modModelsDir, modTexDir, modSoundsDir, modDataRoot, modDataNs, modJukeboxDir;
+        if (INCLUDE_FABRIC_MOD) {
+            tlmod = zip.folder("fabric-mod");
+            mod = tlmod.folder(packName);
+        }
 
         // ---- pack.mcmeta ----
         // Since 25w31a the game uses min_format/max_format [major, minor] pairs
@@ -643,14 +653,14 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         // to the exact 26.2 formats since that's the only version this pack targets.
         dp.file("pack.mcmeta", JSON.stringify({
             pack: {
-                description: packName + " (Datapack)\nMade with Disc Press",
+                description: packName + " (Datapack)",
                 min_format: DATA_PACK_FORMAT,
                 max_format: DATA_PACK_FORMAT
             }
         }, null, 2));
         rp.file("pack.mcmeta", JSON.stringify({
             pack: {
-                description: packName + " (Resource Pack)\nMade with Disc Press",
+                description: packName + " (Resource Pack)",
                 min_format: RESOURCE_PACK_FORMAT,
                 max_format: RESOURCE_PACK_FORMAT
             }
@@ -672,16 +682,17 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         const soundsDir = rpNs.folder("sounds").folder("records");
         const langEntries = {};
 
-        const modNs = mod.folder("src").folder("main");
-        const modResources = modNs.folder("resources");
-        const modAssetsNs = modResources.folder("assets").folder(namespace);
-        const modItemsDir = modAssetsNs.folder("items");
-        const modModelsDir = modAssetsNs.folder("models").folder("item");
-        const modTexDir = modAssetsNs.folder("textures").folder("item");
-        const modSoundsDir = modAssetsNs.folder("sounds").folder("records");
-        const modDataRoot = modResources.folder("data");
-        const modDataNs = modDataRoot.folder(namespace);
-        const modJukeboxDir = modDataNs.folder("jukebox_song");
+        if (INCLUDE_FABRIC_MOD) {
+            modResources = mod.folder("src").folder("main").folder("resources");
+            modAssetsNs = modResources.folder("assets").folder(namespace);
+            modItemsDir = modAssetsNs.folder("items");
+            modModelsDir = modAssetsNs.folder("models").folder("item");
+            modTexDir = modAssetsNs.folder("textures").folder("item");
+            modSoundsDir = modAssetsNs.folder("sounds").folder("records");
+            modDataRoot = modResources.folder("data");
+            modDataNs = modDataRoot.folder(namespace);
+            modJukeboxDir = modDataNs.folder("jukebox_song");
+        }
 
         const geyserMappingsDir = geyser.folder("custom_mappings");
         const geyserRp = geyser.folder("resource_pack");
@@ -696,7 +707,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         let i = 0;
         for (const t of tracks) {
             i++;
-            log(`[${i}/${tracks.length}] ${t.file.name} → converting to OGG Vorbis…`);
+            log(`[${i}/${tracks.length}] ${t.file.name}: converting to OGG Vorbis...`);
             setProgress(5 + (i - 1) / tracks.length * 55);
             let oggBlob;
             try {
@@ -722,7 +733,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
                 comparator_output: comparatorFor(t.duration)
             };
             jukeboxDir.file(id + ".json", JSON.stringify(jukeboxJson, null, 2));
-            modJukeboxDir.file(id + ".json", JSON.stringify(jukeboxJson, null, 2));
+            if (INCLUDE_FABRIC_MOD) modJukeboxDir.file(id + ".json", JSON.stringify(jukeboxJson, null, 2));
 
             // resourcepack: item model + item definition + texture + sound
             const modelJson = {
@@ -730,21 +741,21 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
                 textures: { layer0: `${namespace}:item/${id}` }
             };
             modelsDir.file(id + ".json", JSON.stringify(modelJson, null, 2));
-            modModelsDir.file(id + ".json", JSON.stringify(modelJson, null, 2));
+            if (INCLUDE_FABRIC_MOD) modModelsDir.file(id + ".json", JSON.stringify(modelJson, null, 2));
 
             const itemDefJson = { model: { type: "minecraft:model", model: `${namespace}:item/${id}` } };
             itemsDir.file(id + ".json", JSON.stringify(itemDefJson, null, 2));
-            modItemsDir.file(id + ".json", JSON.stringify(itemDefJson, null, 2));
+            if (INCLUDE_FABRIC_MOD) modItemsDir.file(id + ".json", JSON.stringify(itemDefJson, null, 2));
 
             texDir.file(id + ".png", pngBytes);
-            modTexDir.file(id + ".png", pngBytes);
+            if (INCLUDE_FABRIC_MOD) modTexDir.file(id + ".png", pngBytes);
 
             soundsDir.file(id + ".ogg", oggBytes);
-            modSoundsDir.file(id + ".ogg", oggBytes);
+            if (INCLUDE_FABRIC_MOD) modSoundsDir.file(id + ".ogg", oggBytes);
             soundsJson[id] = { sounds: [{ name: `${namespace}:records/${id}`, stream: true }], subtitle: langKey };
             modSoundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
 
-            // give command — item components are parsed as SNBT, not JSON. custom_name
+            // give command: item components are parsed as SNBT, not JSON. custom_name
             // and lore must be written as bare compound/list literals; wrapping them in
             // an extra pair of quotes (as older 1.20.5-era guides do) turns the whole
             // component into a literal string instead of a parsed text component.
@@ -754,7 +765,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
                 `give @s ${baseDiscItem}[item_model="${namespace}:${id}",jukebox_playable="${soundEventId}",custom_name=${nameComp},lore=${loreComp}]`
             );
 
-            // Geyser v2 custom item definition — maps the item_model value above to a
+            // Geyser v2 custom item definition, maps the item_model value above to a
             // Bedrock custom item. Every track always has a stonecutter recipe (below),
             // so creative_category is always "items" so Bedrock's recipe book shows it.
             const bedrockId = `${namespace}:${id}`;
@@ -768,41 +779,41 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             geyserTextureEntries[bedrockId] = { textures: [`textures/items/${id}`] };
             geyserItemTexDir.file(id + ".png", pngBytes);
 
-            log(`  ✓ ${title} — ${artist} (${t.duration}s, comparator ${comparatorFor(t.duration)})`, "ok");
+            log(`  done: ${title} - ${artist} (${t.duration}s, comparator ${comparatorFor(t.duration)})`, "ok");
             setProgress(5 + i / tracks.length * 55);
         }
 
         rpNs.file("sounds.json", JSON.stringify(soundsJson, null, 2));
-        modAssetsNs.file("sounds.json", JSON.stringify(modSoundsJson, null, 2));
+        if (INCLUDE_FABRIC_MOD) modAssetsNs.file("sounds.json", JSON.stringify(modSoundsJson, null, 2));
 
         fnDir.file("give_all.mcfunction", giveLines.join("\n") + "\n");
         giveLines.forEach((line, idx) => fnDir.file(`give_${tracks[idx] ? tracks[idx].id : idx}.mcfunction`, line + "\n"));
 
         // ---- blank disc (Knowledge Book reskin) + librarian trade ----
         setProgress(64);
-        log("Building blank disc + librarian trade…");
+        log("Building blank disc and librarian trade...");
         const blankId = "blank_disc";
         const blankBaseItem = "minecraft:knowledge_book";
 
         // White main + white ring: a plain, unlabeled-looking blank. No jukebox_playable
-        // at all — this item has no jukebox function of its own, it's purely a
+        // at all, this item has no jukebox function of its own, it's purely a
         // stonecutter ingredient.
         const blankCanvas = buildTexture({ r: 255, g: 255, b: 255 }, { r: 255, g: 255, b: 255 });
         const blankPng = await canvasToPngBytes(blankCanvas);
 
         const blankModelJson = { parent: "minecraft:item/generated", textures: { layer0: `${namespace}:item/${blankId}` } };
         modelsDir.file(blankId + ".json", JSON.stringify(blankModelJson, null, 2));
-        modModelsDir.file(blankId + ".json", JSON.stringify(blankModelJson, null, 2));
+        if (INCLUDE_FABRIC_MOD) modModelsDir.file(blankId + ".json", JSON.stringify(blankModelJson, null, 2));
         const blankItemDefJson = { model: { type: "minecraft:model", model: `${namespace}:item/${blankId}` } };
         itemsDir.file(blankId + ".json", JSON.stringify(blankItemDefJson, null, 2));
-        modItemsDir.file(blankId + ".json", JSON.stringify(blankItemDefJson, null, 2));
+        if (INCLUDE_FABRIC_MOD) modItemsDir.file(blankId + ".json", JSON.stringify(blankItemDefJson, null, 2));
         texDir.file(blankId + ".png", blankPng);
-        modTexDir.file(blankId + ".png", blankPng);
+        if (INCLUDE_FABRIC_MOD) modTexDir.file(blankId + ".png", blankPng);
 
         const blankComponents = {
             item_model: `${namespace}:${blankId}`,
             custom_name: { text: "Blank Disc" },
-            lore: [{text: "Used in a Stonecutter"}]
+            lore: [{ text: "Used in a Stonecutter" }]
         };
 
         fnDir.file("give_blank_disc.mcfunction",
@@ -819,12 +830,12 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         geyserTextureEntries[`${namespace}:${blankId}`] = { textures: [`textures/items/${blankId}`] };
         geyserItemTexDir.file(blankId + ".png", blankPng);
 
-        // Villager trades have no data-pack registry — there's no vanilla file format to
+        // Villager trades have no data-pack registry, there's no vanilla file format to
         // declare one. This runs every tick, finds level-5 librarians who haven't been
         // given the trade yet (tracked via a tag so it's only injected once each), and
         // appends it straight to their Offers.Recipes. Entity-held item stacks here still
         // use the pre-1.20.5 "Count" field (capital, alongside the modern "components"
-        // map) — different from the lowercase "count" used in the recipe JSON below.
+        // map), different from the lowercase "count" used in the recipe JSON below.
         const tradeTag = `${namespace}_blank_trade_added`;
         const tradeOffer = {
             buy: { id: "minecraft:emerald", count: 16 },
@@ -848,40 +859,41 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         dataFolderFor("minecraft").folder("tags").folder("function").file("tick.json",
             JSON.stringify({ values: [`${namespace}:add_blank_trade`] }, null, 2)
         );
-        log("  ✓ blank disc + level-5 librarian trade (16 emeralds + 1 amethyst shard)", "ok");
+        log("  done: blank disc and level-5 librarian trade (16 emeralds + 4 amethyst shards)", "ok");
 
         // ---- stonecutting: blank disc -> each custom disc (one-way only) ----
         setProgress(80);
-        log(`Writing stonecutting recipes for ${tracks.length} disc(s)…`);
+        log(`Writing stonecutting recipes for ${tracks.length} disc(s)...`);
         for (const t of tracks) {
             const comps = discComponents(t, namespace);
             const toId = uniqueId(slugify(t.title) + "_from_blank", usedResourceIds);
             recipeDir.file(toId + ".json", JSON.stringify(buildStonecuttingRecipe(blankBaseItem, baseDiscItem, comps), null, 2));
             advDir.file(toId + ".json", JSON.stringify(autoUnlockAdvancement(namespace, toId), null, 2));
-            log(`  ✓ stonecutter: blank disc → ${t.title}`, "ok");
+            log(`  done: stonecutter recipe for ${t.title}`, "ok");
         }
 
         rpNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
-        modAssetsNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
+        if (INCLUDE_FABRIC_MOD) modAssetsNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
 
-        // ---- fabric.mod.json ----
-        const fabricModJson = {
-            schemaVersion: 1,
-            id: namespace,
-            version: "1.0.0",
-            name: packName,
-            description: `Adds ${tracks.length} custom music disc(s), generated by Disc Press.`,
-            authors: ["Disc Press user"],
-            environment: "*",
-            license: "CC0-1.0",
-            depends: { fabricloader: ">=0.16.0", minecraft: "~26.2", "fabric-resource-loader-v0": "*" }
-        };
-        modResources.file("fabric.mod.json", JSON.stringify(fabricModJson, null, 2));
+        if (INCLUDE_FABRIC_MOD) {
+            const fabricModJson = {
+                schemaVersion: 1,
+                id: namespace,
+                version: "1.0.0",
+                name: packName,
+                description: `Adds ${tracks.length} custom music disc(s), generated by Disc Press.`,
+                authors: [],
+                environment: "*",
+                license: "CC0-1.0",
+                depends: { fabricloader: ">=0.16.0", minecraft: "~26.2", "fabric-resource-loader-v0": "*" }
+            };
+            modResources.file("fabric.mod.json", JSON.stringify(fabricModJson, null, 2));
 
-        mod.file("build.gradle", buildGradle());
-        mod.file("settings.gradle", `pluginManagement {\n  repositories {\n    maven { url 'https://maven.fabricmc.net/' }\n    gradlePluginPortal()\n  }\n}\n`);
-        mod.file("gradle.properties", gradleProperties());
-        mod.file("README.md", modReadme(namespace));
+            mod.file("build.gradle", buildGradle());
+            mod.file("settings.gradle", `pluginManagement {\n  repositories {\n    maven { url 'https://maven.fabricmc.net/' }\n    gradlePluginPortal()\n  }\n}\n`);
+            mod.file("gradle.properties", gradleProperties());
+            mod.file("README.md", modReadme(namespace));
+        }
 
         // ---- geyser mapping (v2) + minimal Bedrock resource pack for icons ----
         setProgress(90);
@@ -915,26 +927,30 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         zip.file("README.txt", topReadme(namespace, DATA_PACK_FORMAT, RESOURCE_PACK_FORMAT, baseDiscItem));
 
         setProgress(95);
-        log("Packing zip…");
+        log("Packing zip...");
         const blob = await zip.generateAsync({ type: "blob" }, (meta) => { setProgress(95 + meta.percent / 20); });
         setProgress(100);
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
         a.href = url; a.download = namespace + "_disc_pack.zip";
         document.body.appendChild(a); a.click(); a.remove();
-        log("Done — download started: " + namespace + "_disc_pack.zip", "ok");
+        log("Done, download started: " + namespace + "_disc_pack.zip", "ok");
         genBtn.disabled = false;
     }
 
     function cryptoRandomUUID() {
         if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
-        // Fallback for browsers without crypto.randomUUID (rare, but no-backend means no server to generate this)
+        // Fallback for browsers without crypto.randomUUID (rare, but there's no
+        // backend here to generate this instead).
         return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
             const r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
             return v.toString(16);
         });
     }
 
+    /* The functions below build the Fabric mod project. They're kept around so the
+       mod option is a flag flip away, but nothing calls them while
+       INCLUDE_FABRIC_MOD is false. */
     function buildGradle() {
         return `plugins {
 \tid 'fabric-loom' version '1.7-SNAPSHOT'
@@ -972,8 +988,8 @@ processResources {
 `;
     }
     function gradleProperties() {
-        return `# Fill these in from https://fabricmc.net/develop for Minecraft 26.2 —
-# they change frequently and are deliberately left as placeholders here.
+        return `# Fill these in from https://fabricmc.net/develop for Minecraft 26.2,
+# they change often and are deliberately left as placeholders here.
 minecraft_version=26.2
 yarn_mappings=26.2+build.1
 loader_version=0.16.9
@@ -983,19 +999,19 @@ maven_group=com.discpress
 `;
     }
     function modReadme(namespace) {
-        return `# ${namespace} — Fabric music disc mod
+        return `# ${namespace} - Fabric music disc mod
 
-This is a plain resource+data bundle wrapped as a Fabric mod jar. There is
+This is a plain resource and data bundle wrapped as a Fabric mod jar. There is
 no Java code: item textures/models, sound events, jukebox_song entries,
 the blank-disc stonecutting recipes, and the trade-injection function under
 src/main/resources are picked up automatically by Minecraft the same way a
-resource pack + datapack would be, because mod jars are merged into both
+resource pack and datapack would be, because mod jars are merged into both
 the resource and data systems.
 
 ## Building
 
-1. Open gradle.properties and fill in the real yarn_mappings / loader_version /
-   fabric_version for Minecraft 26.2 from https://fabricmc.net/develop —
+1. Open gradle.properties and fill in the real yarn_mappings, loader_version
+   and fabric_version for Minecraft 26.2 from https://fabricmc.net/develop,
    these are placeholders and change often, so they are not baked in.
 2. From this folder, run:
        ./gradlew build          (Linux/macOS)
@@ -1003,7 +1019,7 @@ the resource and data systems.
 3. The built jar appears in build/libs/. Drop it into your .minecraft/mods
    folder alongside Fabric Loader + Fabric API for 26.2.
 
-All compiling happens on your machine — nothing here is pre-built.
+Building happens entirely on your machine, nothing here is pre-built.
 `;
     }
     function geyserReadme(namespace) {
@@ -1013,20 +1029,20 @@ All compiling happens on your machine — nothing here is pre-built.
 custom_mappings/${namespace}_discs.json uses Geyser's current v2 custom item
 format (format_version 2, "type": "definition" entries keyed by Java item and
 matched against the item's minecraft:item_model component). The old v1
-format (a flat map of custom_model_data numbers) is deprecated and is NOT
+format (a flat map of custom_model_data numbers) is deprecated and is not
 what this pack generates.
 
 There are two groups of entries: the real, playable discs (keyed under
-whichever vanilla disc item you picked in the tool) and the blank disc
-(keyed under minecraft:knowledge_book).
+whichever vanilla disc item the pack uses) and the blank disc (keyed under
+minecraft:knowledge_book).
 
 Setup:
 1. Copy custom_mappings/${namespace}_discs.json into Geyser's own
-   custom_mappings/ folder (created next to Geyser's jar / data folder after
+   custom_mappings/ folder (created next to Geyser's jar/data folder after
    its first run).
 2. Copy the contents of resource_pack/ into a Bedrock resource pack folder
    (or zip it) and drop it into Geyser's packs/ folder. It only contains a
-   manifest and per-disc icon textures pulled from the generated disc art —
+   manifest and per-disc icon textures pulled from the generated disc art,
    Geyser needs this to show the right icon in Bedrock inventories; it does
    not affect Java players at all.
 3. Make sure gameplay.enable-custom-content: true is set in Geyser's config.
@@ -1052,47 +1068,44 @@ exactly the 26.2 formats above.
 
 Contents
 --------
-datapack/       - drop the folder within this directory into a world's
-                   .minecraft/saves/<world>/datapacks/${namespace}/ folder,
-                   or zip it and use as a datapack. Includes jukebox songs,
-                   give functions, the blank-disc trade-injection function,
-                   and the stonecutting recipes/advancements.
-resourcepack/    - same idea, the folder within goes in .minecraft/resourcepacks/, or zip it.
-fabric-mod/      - full Gradle project source. Run the build yourself
-                   (see fabric-mod/README.md) — nothing is precompiled.
-geyser/          - Geyser v2 custom item mappings plus a minimal Bedrock
-                   resource pack with disc icon textures. See geyser/README.md.
+datapack/       drop the folder inside this directory into a world's
+                 .minecraft/saves/<world>/datapacks/${namespace}/ folder,
+                 or zip it and use as a datapack. Includes jukebox songs,
+                 give functions, the blank-disc trade-injection function,
+                 and the stonecutting recipes/advancements.
+resourcepack/    same idea, the folder inside goes in .minecraft/resourcepacks/, or zip it.
+geyser/          Geyser v2 custom item mappings plus a minimal Bedrock
+                 resource pack with disc icon textures. See geyser/README.md.
 
 Getting discs in-game
 ----------------------
-Every real disc is built on top of ${baseDiscItem} — its name, texture,
+Every real disc is built on top of ${baseDiscItem}, its name, texture,
 model and sound are swapped via item components, but the underlying item
 stays that one vanilla disc. Each track's own function is at
 datapack/data/${namespace}/function/give_<id>.mcfunction, and give_all.mcfunction
 runs every one of them at once. /give commands use the current item-component
 SNBT syntax (custom_name={text:"..."}), not the pre-1.21.5 JSON-string style.
 
-Blank disc & the stonecutter
-------------------------------
-Trade 16 emeralds + 4 amethyst shard with a level 5 (master) librarian for a
+Blank disc and the stonecutter
+-------------------------------
+Trade 16 emeralds + 4 amethyst shards with a level 5 (master) librarian for a
 blank disc. Vanilla has no data-pack registry for villager trades, so this is
 done with a function (data/${namespace}/function/add_blank_trade.mcfunction,
 hooked into the #minecraft:tick function tag) that finds level-5 librarians
 who haven't received the trade yet and injects it directly into their
 Offers.Recipes, tagging them afterward so it's only added once per villager.
 
-The blank disc itself is a reskinned minecraft:knowledge_book — an all-white
-label, and deliberately given no jukebox_playable component, so it has no
+The blank disc itself is a reskinned minecraft:knowledge_book, an all-white
+label, deliberately given no jukebox_playable component, so it has no
 function of its own beyond being a stonecutter ingredient. Put it in a
 stonecutter to turn it into any of your custom discs
 (data/${namespace}/recipe/<id>_from_blank.json). There is intentionally no
 disc-to-blank conversion.
 
 Knowledge books have no natural source in survival and aren't offered in the
-creative menu, so — unlike an approach built on a second copy of a vanilla
-disc — nothing else a player might be holding can trigger these stonecutting
-recipes by accident. The real, playable discs never have to serve double
-duty as a stonecutter ingredient.
+creative menu, so nothing else a player might be holding can trigger these
+stonecutting recipes by accident, and the real, playable discs never have to
+serve double duty as a stonecutter ingredient.
 
 Notes on 26.2
 -------------
@@ -1100,13 +1113,9 @@ Notes on 26.2
 jukebox_playable, custom_name, lore and recipe results with "components"
 are all set via item components rather than legacy NBT tags. Commands (like
 the /give lines above) are parsed as SNBT, which is why component values use
-unquoted compound keys, e.g. {text:"..."} — wrapping a whole component in an
+unquoted compound keys, e.g. {text:"..."}, wrapping a whole component in an
 extra pair of quotes (valid in some pre-1.21.5 tutorials) turns it into a
 literal string instead of a parsed component and silently breaks the name/lore.
-
-Only the resourcepack and datapack are needed for a vanilla server/client
-combo. Use fabric-mod instead of (or alongside) them if you want the discs
-bundled as an actual mod, e.g. for a modded Fabric server.
 `;
     }
 
