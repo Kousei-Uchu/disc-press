@@ -24,7 +24,35 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         existing.add(id);
         return id;
     }
-    function escapeJson(str) { return JSON.stringify(str).slice(1, -1); }
+
+    /* Sanitizes a resource-location PATH (the part after the colon) — keeps
+       slashes (for nested folders like chests/village/foo) but strips anything
+       the game won't accept in a namespaced path. */
+    function sanitizeResourcePath(p) {
+        return (p || "").trim().toLowerCase()
+            .replace(/[^a-z0-9/_.-]/g, "_")
+            .replace(/\/+/g, "/")
+            .replace(/^\/+|\/+$/g, "");
+    }
+    function sanitizeNamespace(n) {
+        return (n || "").trim().toLowerCase().replace(/[^a-z0-9_.-]/g, "_") || "minecraft";
+    }
+    /* Splits "namespace:some/path" into parts; bare "some/path" falls back to defaultNs. */
+    function parseResourceLocation(id, defaultNs) {
+        const raw = (id || "").trim();
+        const idx = raw.indexOf(":");
+        if (idx === -1) return { namespace: sanitizeNamespace(defaultNs), path: sanitizeResourcePath(raw) };
+        return { namespace: sanitizeNamespace(raw.slice(0, idx)), path: sanitizeResourcePath(raw.slice(idx + 1)) };
+    }
+
+    /* Escapes a JS string into a double-quoted SNBT string literal, e.g. for use
+       inside a /give command's item component brackets: custom_name={text:"..."} .
+       This is NOT JSON.stringify — commands are parsed as SNBT, not JSON, and
+       (critically) the value must NOT be wrapped in an extra pair of quotes or it
+       becomes a literal string instead of a parsed text component. */
+    function snbtStr(s) {
+        return '"' + String(s == null ? "" : s).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"';
+    }
 
     /* ---------------- color math ---------------- */
     function relLuminance(r, g, b) {
@@ -55,14 +83,6 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         else if (h < 180) { r = 0; g = c; b = x } else if (h < 240) { r = 0; g = x; b = c }
         else if (h < 300) { r = x; g = 0; b = c } else { r = c; g = 0; b = x }
         return [Math.round((r + m) * 255), Math.round((g + m) * 255), Math.round((b + m) * 255)];
-    }
-    function colorDist(c1, c2) {
-        const dr = c1[0] - c2[0], dg = c1[1] - c2[1], db = c1[2] - c2[2];
-        return Math.sqrt(dr * dr + dg * dg + db * db);
-    }
-    function hueDist(a, b) {
-        const d = Math.abs(a - b) % 360;
-        return d > 180 ? 360 - d : d;
     }
     function toHex(r, g, b) { return "#" + [r, g, b].map(v => v.toString(16).padStart(2, "0")).join(""); }
 
@@ -159,108 +179,63 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     }
 
     /* ---------------- disc template reader ---------------- */
-    let TEMPLATE = null; // {w,h,group:[],lumDelta:[],alpha:[]}
-    const REF_RED = [255, 0, 0];
-    const REF_YELLOW = [255, 255, 0];
+    let TEMPLATE = null; // {w,h,main,ring}
 
     function loadTemplate() {
-    return Promise.all([
-        loadImageData("./disc_template_main.png"),
-        loadImageData("./disc_template_ring.png")
-    ]).then(([main, ring]) => {
-
-        TEMPLATE = {
-            w: main.width,
-            h: main.height,
-            main,
-            ring
-        };
-
-        log("Loaded split disc templates", "ok");
-    });
-}
-
-function loadImageData(src) {
-    return new Promise(resolve => {
-        const img = new Image();
-
-        img.onload = () => {
-            const c = document.createElement("canvas");
-            c.width = img.width;
-            c.height = img.height;
-
-            const ctx = c.getContext("2d");
-            ctx.drawImage(img,0,0);
-
-            resolve({
-                width: img.width,
-                height: img.height,
-                data: ctx.getImageData(
-                    0,
-                    0,
-                    img.width,
-                    img.height
-                )
-            });
-        };
-
-        img.src = src;
-    });
-}
-
-    function buildTexture(mainColor, ringColor) {
-
-    const {w,h,main,ring} = TEMPLATE;
-
-    const canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-
-    const ctx = canvas.getContext("2d");
-    const out = ctx.createImageData(w,h);
-
-
-    function applyLayer(layer, color){
-
-        for(let p=0;p<w*h;p++){
-
-            const i=p*4;
-
-            const brightness =
-                layer.data.data[i] / 255;
-
-            const alpha =
-                layer.data.data[i+3];
-
-            if(alpha === 0) continue;
-
-
-            out.data[i] =
-                color.r * brightness;
-
-            out.data[i+1] =
-                color.g * brightness;
-
-            out.data[i+2] =
-                color.b * brightness;
-
-            out.data[i+3] =
-                Math.max(
-                    out.data[i+3],
-                    alpha
-                );
-        }
+        return Promise.all([
+            loadImageData("./disc_template_main.png"),
+            loadImageData("./disc_template_ring.png")
+        ]).then(([main, ring]) => {
+            TEMPLATE = { w: main.width, h: main.height, main, ring };
+            log("Loaded split disc templates", "ok");
+        });
     }
 
+    function loadImageData(src) {
+        return new Promise(resolve => {
+            const img = new Image();
+            img.onload = () => {
+                const c = document.createElement("canvas");
+                c.width = img.width;
+                c.height = img.height;
+                const ctx = c.getContext("2d");
+                ctx.drawImage(img, 0, 0);
+                resolve({
+                    width: img.width,
+                    height: img.height,
+                    data: ctx.getImageData(0, 0, img.width, img.height)
+                });
+            };
+            img.src = src;
+        });
+    }
 
-    applyLayer(main.data ? main : main, mainColor);
-    applyLayer(ring.data ? ring : ring, ringColor);
+    function buildTexture(mainColor, ringColor) {
+        const { w, h, main, ring } = TEMPLATE;
+        const canvas = document.createElement("canvas");
+        canvas.width = w;
+        canvas.height = h;
+        const ctx = canvas.getContext("2d");
+        const out = ctx.createImageData(w, h);
 
+        function applyLayer(layer, color) {
+            for (let p = 0; p < w * h; p++) {
+                const i = p * 4;
+                const brightness = layer.data.data[i] / 255;
+                const alpha = layer.data.data[i + 3];
+                if (alpha === 0) continue;
+                out.data[i] = color.r * brightness;
+                out.data[i + 1] = color.g * brightness;
+                out.data[i + 2] = color.b * brightness;
+                out.data[i + 3] = Math.max(out.data[i + 3], alpha);
+            }
+        }
 
-    ctx.putImageData(out,0,0);
-
-    return canvas;
-}
+        applyLayer(main, mainColor);
+        applyLayer(ring, ringColor);
+        ctx.putImageData(out, 0, 0);
+        return canvas;
+    }
 
     /* ---------------- metadata ---------------- */
     function readTags(file) {
@@ -276,13 +251,30 @@ function loadImageData(src) {
     /* ---------------- state ---------------- */
     const tracks = []; // {id, file, title, artist, cover(dataURL|null), colors, canvas, oggBlob, duration, status}
     const usedIds = new Set();
+    const lootEntries = []; // {id, trackId, mode, tableId, tableType, rolls, chance}
+    const recipes = [];     // {id, trackId, kind, cells[9]|ingredients[], autoUnlock}
+    const usedResourceIds = new Set(); // recipe / loot ids within the project namespace
 
     const tracksEl = $("#tracks"), emptyMsg = $("#emptyMsg"), genBtn = $("#generateBtn"), genHint = $("#genHint");
+    const lootTrackSelect = $("#lootTrackSelect"), recipeTrackSelect = $("#recipeTrackSelect");
+    const lootListEl = $("#lootList"), recipeListEl = $("#recipeList");
 
     function refreshEmpty() {
         emptyMsg.style.display = tracks.length ? "none" : "block";
         genBtn.disabled = tracks.length === 0;
         genHint.textContent = tracks.length ? tracks.length + " track(s) ready." : "Add at least one track to enable this.";
+        updateTrackSelects();
+    }
+
+    function updateTrackSelects() {
+        [lootTrackSelect, recipeTrackSelect].forEach(sel => {
+            if (!sel) return;
+            const prev = sel.value;
+            sel.innerHTML = tracks.length
+                ? tracks.map(t => `<option value="${t.id}">${(t.title || t.file.name).replace(/"/g, "&quot;")}</option>`).join("")
+                : `<option value="">Add a track first…</option>`;
+            if (tracks.some(t => t.id === prev)) sel.value = prev;
+        });
     }
 
     async function addFile(file) {
@@ -330,6 +322,7 @@ function loadImageData(src) {
             console.error(err);
         }
         renderTrack(track);
+        updateTrackSelects();
     }
 
     function fauxImageDataFromString(str) {
@@ -399,7 +392,7 @@ function loadImageData(src) {
             img.onload = () => { const ctx = cnv.getContext("2d"); ctx.imageSmoothingEnabled = false; ctx.drawImage(img, 0, 0, 16, 16); };
             img.src = cnv.dataset.src;
         }
-        el.querySelector('[data-field="title"]').addEventListener("input", (e) => { t.title = e.target.value; });
+        el.querySelector('[data-field="title"]').addEventListener("input", (e) => { t.title = e.target.value; updateTrackSelects(); });
         el.querySelector('[data-field="artist"]').addEventListener("input", (e) => { t.artist = e.target.value; });
         el.querySelectorAll('.swatch[data-color]').forEach(sw => {
             sw.addEventListener("click", () => openColorModal(t, sw.dataset.color));
@@ -409,6 +402,11 @@ function loadImageData(src) {
             if (idx >= 0) tracks.splice(idx, 1);
             usedIds.delete(t.id);
             el.remove();
+            // drop any loot/recipe entries that referenced this track
+            for (let i = lootEntries.length - 1; i >= 0; i--) if (lootEntries[i].trackId === t.id) lootEntries.splice(i, 1);
+            for (let i = recipes.length - 1; i >= 0; i--) if (recipes[i].trackId === t.id) recipes.splice(i, 1);
+            renderLootList();
+            renderRecipeList();
             refreshEmpty();
         });
     }
@@ -531,6 +529,121 @@ function loadImageData(src) {
         handleFileList(dropped);
     });
 
+    /* ---------------- loot table placements ---------------- */
+    const addLootBtn = $("#addLootBtn");
+    if (addLootBtn) addLootBtn.addEventListener("click", () => {
+        const trackId = lootTrackSelect.value;
+        if (!trackId) { log("Add a track before adding a loot placement.", "err"); return; }
+        const tableIdRaw = $("#lootTableId").value.trim();
+        if (!tableIdRaw) { $("#lootTableId").style.borderColor = "var(--err)"; return; }
+        $("#lootTableId").style.borderColor = "";
+        const entry = {
+            id: "loot_" + Math.random().toString(36).slice(2, 9),
+            trackId,
+            mode: $("#lootMode").value,
+            tableId: tableIdRaw,
+            tableType: $("#lootTableType").value,
+            rolls: Math.max(1, parseInt($("#lootRolls").value, 10) || 1),
+            chance: (() => { const v = parseFloat($("#lootChance").value); return isFinite(v) && v > 0 && v < 1 ? v : null; })()
+        };
+        lootEntries.push(entry);
+        renderLootList();
+    });
+
+    function renderLootList() {
+        if (!lootListEl) return;
+        if (!lootEntries.length) { lootListEl.innerHTML = `<div class="hint">No loot placements added yet.</div>`; return; }
+        lootListEl.innerHTML = lootEntries.map(e => {
+            const t = tracks.find(tr => tr.id === e.trackId);
+            const trackName = t ? (t.title || t.file.name) : "(removed track)";
+            const modeTag = e.mode === "override"
+                ? `<span class="status-chip err">override</span>`
+                : `<span class="status-chip ok">standalone</span>`;
+            return `<div class="entry-row" data-id="${e.id}">
+        <div class="entry-main">
+          <strong>${trackName.replace(/</g, "&lt;")}</strong> → <code>${e.tableId.replace(/</g, "&lt;")}</code>
+          ${modeTag}
+          <span class="hint" style="margin:0">rolls ${e.rolls}${e.chance ? `, ${(e.chance * 100).toFixed(0)}% chance` : ""}, ${e.tableType} table</span>
+        </div>
+        <button class="btn-remove" data-remove-loot>Remove</button>
+      </div>`;
+        }).join("");
+        lootListEl.querySelectorAll("[data-remove-loot]").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                const id = e.target.closest(".entry-row").dataset.id;
+                const idx = lootEntries.findIndex(x => x.id === id);
+                if (idx >= 0) lootEntries.splice(idx, 1);
+                renderLootList();
+            });
+        });
+    }
+
+    /* ---------------- crafting recipes ---------------- */
+    const recipeGridEl = $("#recipeGrid");
+    const recipeTypeEl = $("#recipeType");
+    let recipeCells = new Array(9).fill("");
+
+    function renderRecipeGrid() {
+        if (!recipeGridEl) return;
+        const shapeless = recipeTypeEl.value === "shapeless";
+        recipeGridEl.className = "recipe-grid" + (shapeless ? " shapeless" : "");
+        recipeGridEl.innerHTML = new Array(9).fill(0).map((_, i) =>
+            `<input type="text" class="recipe-cell" data-i="${i}" placeholder="${shapeless ? "item id" : (i === 4 ? "center" : "—")}" value="${(recipeCells[i] || "").replace(/"/g, "&quot;")}">`
+        ).join("");
+        recipeGridEl.querySelectorAll(".recipe-cell").forEach(inp => {
+            inp.addEventListener("input", (e) => { recipeCells[e.target.dataset.i] = e.target.value.trim(); });
+        });
+    }
+    if (recipeTypeEl) { recipeTypeEl.addEventListener("change", renderRecipeGrid); renderRecipeGrid(); }
+
+    const addRecipeBtn = $("#addRecipeBtn");
+    if (addRecipeBtn) addRecipeBtn.addEventListener("click", () => {
+        const trackId = recipeTrackSelect.value;
+        if (!trackId) { log("Add a track before adding a recipe.", "err"); return; }
+        const kind = recipeTypeEl.value;
+        const cells = recipeCells.map(c => (c || "").trim());
+        const filled = cells.filter(Boolean);
+        if (!filled.length) { log("Fill in at least one crafting grid cell.", "err"); return; }
+        const recipe = {
+            id: "recipe_" + Math.random().toString(36).slice(2, 9),
+            trackId, kind,
+            cells: cells.slice(),
+            autoUnlock: $("#recipeAutoUnlock").checked
+        };
+        recipes.push(recipe);
+        recipeCells = new Array(9).fill("");
+        renderRecipeGrid();
+        renderRecipeList();
+    });
+
+    function renderRecipeList() {
+        if (!recipeListEl) return;
+        if (!recipes.length) { recipeListEl.innerHTML = `<div class="hint">No recipes added yet.</div>`; return; }
+        recipeListEl.innerHTML = recipes.map(r => {
+            const t = tracks.find(tr => tr.id === r.trackId);
+            const trackName = t ? (t.title || t.file.name) : "(removed track)";
+            const summary = r.kind === "shapeless"
+                ? r.cells.filter(Boolean).join(" + ")
+                : "3×3 shaped grid (" + r.cells.filter(Boolean).length + " item(s) placed)";
+            return `<div class="entry-row" data-id="${r.id}">
+        <div class="entry-main">
+          <strong>${trackName.replace(/</g, "&lt;")}</strong>
+          <span class="status-chip ${r.kind === "shapeless" ? "busy" : "ok"}">${r.kind}</span>
+          <span class="hint" style="margin:0">${summary.replace(/</g, "&lt;")}${r.autoUnlock ? "" : " · manual unlock"}</span>
+        </div>
+        <button class="btn-remove" data-remove-recipe>Remove</button>
+      </div>`;
+        }).join("");
+        recipeListEl.querySelectorAll("[data-remove-recipe]").forEach(btn => {
+            btn.addEventListener("click", (e) => {
+                const id = e.target.closest(".entry-row").dataset.id;
+                const idx = recipes.findIndex(x => x.id === id);
+                if (idx >= 0) recipes.splice(idx, 1);
+                renderRecipeList();
+            });
+        });
+    }
+
     /* ---------------- ffmpeg (audio -> ogg vorbis) ---------------- */
     let ffmpegInstance = null;
 
@@ -579,6 +692,13 @@ function loadImageData(src) {
     }
 
     /* ---------------- pack assembly ---------------- */
+
+    // Minecraft 26.2 pack formats (see https://minecraft.wiki/w/Pack_format).
+    // Since 25w31a pack.mcmeta uses min_format/max_format [major, minor] pairs
+    // instead of a single legacy pack_format number.
+    const DATA_PACK_FORMAT = [107, 1];
+    const RESOURCE_PACK_FORMAT = [88, 0];
+
     function comparatorFor(durationSeconds) {
         return Math.min(15, Math.max(1, Math.round(durationSeconds / 30)));
     }
@@ -591,6 +711,80 @@ function loadImageData(src) {
         });
     }
 
+    /* The set of item-component overrides that make base music_disc_11 into this
+       specific custom disc. Shared by the /give command, loot table set_components
+       function, and recipe result — so all three ways of obtaining a disc agree. */
+    function discComponents(t, namespace) {
+        return {
+            item_model: `${namespace}:${t.id}`,
+            jukebox_playable: `${namespace}:${t.id}`,
+            custom_name: { text: t.title || "Unknown Title" },
+            lore: [{ text: t.artist || "Unknown Artist", italic: true, color: "gray" }]
+        };
+    }
+
+    function buildLootTable(entry, components) {
+        const typeMap = {
+            chest: "minecraft:chest",
+            entity: "minecraft:entity",
+            block: "minecraft:block",
+            generic: "minecraft:generic"
+        };
+        const itemEntry = {
+            type: "minecraft:item",
+            name: "minecraft:music_disc_11",
+            functions: [
+                { function: "minecraft:set_components", components, mode: "merge" }
+            ]
+        };
+        if (entry.chance) {
+            itemEntry.conditions = [{ condition: "minecraft:random_chance", chance: entry.chance }];
+        }
+        return {
+            type: typeMap[entry.tableType] || "minecraft:generic",
+            pools: [{ rolls: entry.rolls, entries: [itemEntry] }]
+        };
+    }
+
+    function buildRecipeJson(recipe, components) {
+        const result = { id: "minecraft:music_disc_11", count: 1, components };
+        if (recipe.kind === "shapeless") {
+            return {
+                type: "minecraft:crafting_shapeless",
+                category: "misc",
+                ingredients: recipe.cells.filter(Boolean),
+                result
+            };
+        }
+        // shaped: map the 3x3 cell grid to unique symbols
+        const symbolFor = new Map();
+        let next = 65; // 'A'
+        const key = {};
+        const rows = [0, 1, 2].map(r => {
+            let row = "";
+            for (let c = 0; c < 3; c++) {
+                const item = recipe.cells[r * 3 + c];
+                if (!item) { row += " "; continue; }
+                if (!symbolFor.has(item)) {
+                    const sym = String.fromCharCode(next++);
+                    symbolFor.set(item, sym);
+                    key[sym] = item;
+                }
+                row += symbolFor.get(item);
+            }
+            return row;
+        });
+        // trim fully-empty leading/trailing columns/rows so the pattern isn't
+        // unnecessarily padded (Minecraft allows this, but keep it tidy)
+        return {
+            type: "minecraft:crafting_shaped",
+            category: "misc",
+            pattern: rows,
+            key,
+            result
+        };
+    }
+
     async function generateAll() {
         const namespace = ($("#namespace").value.trim() || "customdiscs").toLowerCase().replace(/[^a-z0-9_.-]/g, "_");
         const packName = $("#packname").value.trim() || "Custom Discs";
@@ -601,6 +795,7 @@ function loadImageData(src) {
         logEl.innerHTML = "";
         setProgress(2);
         log("Starting build for " + tracks.length + " track(s), namespace \"" + namespace + "\"…");
+        log(`Targeting Minecraft 26.2 — data pack format ${DATA_PACK_FORMAT.join(".")}, resource pack format ${RESOURCE_PACK_FORMAT.join(".")}.`);
 
         const zip = new JSZip();
         const dp = zip.folder("datapack");
@@ -608,18 +803,33 @@ function loadImageData(src) {
         const mod = zip.folder("fabric-mod");
         const geyser = zip.folder("geyser");
 
-        // ---- pack.mcmeta (26.2 -> pack_format 107) ----
-        const PACK_FORMAT = 107;
+        // ---- pack.mcmeta ----
+        // Since 25w31a the game uses min_format/max_format [major, minor] pairs
+        // rather than a single pack_format integer. Both min and max are pinned
+        // to the exact 26.2 formats since that's the only version this pack targets.
         dp.file("pack.mcmeta", JSON.stringify({
-            pack: { pack_format: PACK_FORMAT, description: packName + " (datapack)" }
+            pack: {
+                description: packName + " (datapack)",
+                min_format: DATA_PACK_FORMAT,
+                max_format: DATA_PACK_FORMAT
+            }
         }, null, 2));
         rp.file("pack.mcmeta", JSON.stringify({
-            pack: { pack_format: PACK_FORMAT, description: packName + " (resource pack)" }
+            pack: {
+                description: packName + " (resource pack)",
+                min_format: RESOURCE_PACK_FORMAT,
+                max_format: RESOURCE_PACK_FORMAT
+            }
         }, null, 2));
 
-        const dpNs = dp.folder("data").folder(namespace);
+        const dataRoot = dp.folder("data");
+        function dataFolderFor(ns) { return dataRoot.folder(ns); } // JSZip folder() is idempotent per path
+
+        const dpNs = dataFolderFor(namespace);
         const jukeboxDir = dpNs.folder("jukebox_song");
         const fnDir = dpNs.folder("function");
+        const recipeDir = dpNs.folder("recipe");
+        const advDir = dpNs.folder("advancement").folder("recipes");
 
         const rpNs = rp.folder("assets").folder(namespace);
         const itemsDir = rpNs.folder("items");
@@ -635,19 +845,29 @@ function loadImageData(src) {
         const modModelsDir = modAssetsNs.folder("models").folder("item");
         const modTexDir = modAssetsNs.folder("textures").folder("item");
         const modSoundsDir = modAssetsNs.folder("sounds").folder("records");
-        const modDataNs = modResources.folder("data").folder(namespace);
+        const modDataRoot = modResources.folder("data");
+        const modDataNs = modDataRoot.folder(namespace);
         const modJukeboxDir = modDataNs.folder("jukebox_song");
 
+        const geyserMappingsDir = geyser.folder("custom_mappings");
+        const geyserRp = geyser.folder("resource_pack");
+        const geyserItemTexDir = geyserRp.folder("textures").folder("items");
+
         const giveLines = [];
-        const geyserMappings = [];
+        const geyserItems = []; // v2 "definition" entries
+        const geyserTextureEntries = {}; // item_texture.json texture_data entries
         const soundsJson = {};
         const modSoundsJson = {};
+        const pngByTrackId = {};
+        const recipeUnlocks = {}; // trackId -> track has a recipe, used for geyser creative_category
+
+        for (const r of recipes) recipeUnlocks[r.trackId] = true;
 
         let i = 0;
         for (const t of tracks) {
             i++;
             log(`[${i}/${tracks.length}] ${t.file.name} → converting to OGG Vorbis…`);
-            setProgress(5 + (i - 1) / tracks.length * 70);
+            setProgress(5 + (i - 1) / tracks.length * 60);
             let oggBlob;
             try {
                 oggBlob = await convertToOgg(t);
@@ -657,6 +877,7 @@ function loadImageData(src) {
             }
             const oggBytes = new Uint8Array(await oggBlob.arrayBuffer());
             const pngBytes = await canvasToPngBytes(t.canvas);
+            pngByTrackId[t.id] = pngBytes;
             const id = t.id;
             const title = t.title || "Unknown Title";
             const artist = t.artist || "Unknown Artist";
@@ -694,24 +915,39 @@ function loadImageData(src) {
             soundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
             modSoundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
 
-            // give command
-            const nameComp = JSON.stringify({ text: title });
-            const loreComp = JSON.stringify([{ text: artist, italic: true, color: "gray" }]);
+            // give command — item components are parsed as SNBT, not JSON. custom_name
+            // and lore must be written as bare compound/list literals; wrapping them in
+            // an extra pair of quotes (as older 1.20.5-era guides do) turns the whole
+            // component into a literal string instead of a parsed text component.
+            const nameComp = `{text:${snbtStr(title)}}`;
+            const loreComp = `[{text:${snbtStr(artist)},italic:true,color:"gray"}]`;
             giveLines.push(
-                `give @s minecraft:music_disc_11[item_model="${namespace}:${id}",jukebox_playable="${soundEventId}",custom_name='${nameComp}',lore=[${loreComp.slice(1, -1)}]]`
+                `give @s minecraft:music_disc_11[item_model="${namespace}:${id}",jukebox_playable="${soundEventId}",custom_name=${nameComp},lore=${loreComp}]`
             );
 
-            // geyser custom item mapping (Geyser 2.x custom_mappings format)
-            geyserMappings.push({
-                name: `${namespace}_${id}`,
-                item: "minecraft:music_disc_11",
-                icon: `${namespace}_${id}`,
-                predicate: { property: "minecraft:custom_model_data", index: 0, fallback: false },
-                custom_model_data: id.length // placeholder distinguishing value; see README for matching real values
+            // Geyser v2 custom item definition — maps the item_model value above to a
+            // Bedrock custom item. format_version 1 / the old customModelData keyed
+            // structure is deprecated; this uses the current predicate-based v2 schema.
+            const bedrockId = `${namespace}:${id}`;
+            const hasRecipe = !!recipeUnlocks[id];
+            geyserItems.push({
+                type: "definition",
+                model: `${namespace}:${id}`,
+                bedrock_identifier: bedrockId,
+                display_name: `${title} - ${artist}`,
+                bedrock_options: {
+                    icon: bedrockId,
+                    // Bedrock only shows recipes for custom items in the recipe book
+                    // if a creative_category is set — matters if this disc has a
+                    // crafting recipe attached below.
+                    creative_category: hasRecipe ? "items" : "none"
+                }
             });
+            geyserTextureEntries[bedrockId] = { textures: [`textures/items/${id}`] };
+            geyserItemTexDir.file(id + ".png", pngBytes);
 
             log(`  ✓ ${title} — ${artist} (${t.duration}s, comparator ${comparatorFor(t.duration)})`, "ok");
-            setProgress(5 + i / tracks.length * 70);
+            setProgress(5 + i / tracks.length * 60);
         }
 
         rpNs.file("sounds.json", JSON.stringify(soundsJson, null, 2));
@@ -721,6 +957,53 @@ function loadImageData(src) {
 
         fnDir.file("give_all.mcfunction", giveLines.join("\n") + "\n");
         giveLines.forEach((line, idx) => fnDir.file(`give_${tracks[idx] ? tracks[idx].id : idx}.mcfunction`, line + "\n"));
+
+        // ---- loot table placements ----
+        setProgress(68);
+        if (lootEntries.length) log(`Writing ${lootEntries.length} loot table placement(s)…`);
+        for (const entry of lootEntries) {
+            const t = tracks.find(tr => tr.id === entry.trackId);
+            if (!t) continue;
+            const defaultNs = entry.mode === "override" ? "minecraft" : namespace;
+            const { namespace: tblNs, path: tblPath } = parseResourceLocation(entry.tableId, defaultNs);
+            if (!tblPath) { log(`  skipped loot placement for ${t.title}: empty table path`, "err"); continue; }
+            const table = buildLootTable(entry, discComponents(t, namespace));
+            const targetFolder = dataFolderFor(tblNs).folder("loot_table");
+            // JSZip folder("a/b/c") handles nested paths fine
+            const parts = tblPath.split("/");
+            const fileName = parts.pop() + ".json";
+            const nestedFolder = parts.length ? targetFolder.folder(parts.join("/")) : targetFolder;
+            nestedFolder.file(fileName, JSON.stringify(table, null, 2));
+            if (entry.mode === "override") {
+                log(`  ⚠ overriding ${tblNs}:${tblPath} — this REPLACES that loot table file entirely, it does not merge with vanilla's other drops`, "err");
+            } else {
+                log(`  ✓ standalone loot table ${tblNs}:${tblPath} (${t.title})`, "ok");
+            }
+        }
+
+        // ---- crafting recipes ----
+        setProgress(74);
+        if (recipes.length) log(`Writing ${recipes.length} crafting recipe(s)…`);
+        for (const recipe of recipes) {
+            const t = tracks.find(tr => tr.id === recipe.trackId);
+            if (!t) continue;
+            const recId = uniqueId(slugify(t.title) + "_recipe", usedResourceIds);
+            const recipeJson = buildRecipeJson(recipe, discComponents(t, namespace));
+            recipeDir.file(recId + ".json", JSON.stringify(recipeJson, null, 2));
+            if (recipe.autoUnlock) {
+                // Standard datapack technique: minecraft:recipes/root is an invisible
+                // advancement every player has by default (it anchors the recipe book
+                // tabs), so granting a child of it via a trigger that fires immediately
+                // unlocks the recipe for everyone without any extra criteria.
+                const advJson = {
+                    parent: "minecraft:recipes/root",
+                    criteria: { unlock: { trigger: "minecraft:tick" } },
+                    rewards: { recipes: [`${namespace}:${recId}`] }
+                };
+                advDir.file(recId + ".json", JSON.stringify(advJson, null, 2));
+            }
+            log(`  ✓ recipe ${namespace}:${recId} (${recipe.kind}) → ${t.title}`, "ok");
+        }
 
         // ---- fabric.mod.json ----
         const fabricModJson = {
@@ -741,16 +1024,33 @@ function loadImageData(src) {
         mod.file("gradle.properties", gradleProperties());
         mod.file("README.md", modReadme(namespace));
 
-        // ---- geyser mapping ----
-        geyser.file("custom_items.json", JSON.stringify({
-            format_version: "1", identifier: "custom_items", items: {
-                music_disc_11: geyserMappings.map(m => ({
-                    name: m.name, custom_model_data: m.custom_model_data, icon: m.icon
-                }))
-            }
+        // ---- geyser mapping (v2) + minimal Bedrock resource pack for icons ----
+        setProgress(80);
+        geyserMappingsDir.file(namespace + "_discs.json", JSON.stringify({
+            format_version: 2,
+            items: { "minecraft:music_disc_11": geyserItems }
         }, null, 2));
 
-        zip.file("README.txt", topReadme(namespace, PACK_FORMAT));
+        const rpUuid1 = cryptoRandomUUID(), rpUuid2 = cryptoRandomUUID();
+        geyserRp.file("manifest.json", JSON.stringify({
+            format_version: 2,
+            header: {
+                name: packName + " (Bedrock icons)",
+                description: "Icons for " + packName + ", used by Geyser to show custom disc textures to Bedrock players.",
+                uuid: rpUuid1,
+                version: [1, 0, 0],
+                min_engine_version: [1, 21, 0]
+            },
+            modules: [{ type: "resources", uuid: rpUuid2, version: [1, 0, 0] }]
+        }, null, 2));
+        geyserRp.folder("textures").file("item_texture.json", JSON.stringify({
+            resource_pack_name: namespace,
+            texture_name: "atlas.items",
+            texture_data: geyserTextureEntries
+        }, null, 2));
+        geyser.file("README.md", geyserReadme(namespace));
+
+        zip.file("README.txt", topReadme(namespace, DATA_PACK_FORMAT, RESOURCE_PACK_FORMAT));
 
         setProgress(90);
         log("Packing zip…");
@@ -762,6 +1062,15 @@ function loadImageData(src) {
         document.body.appendChild(a); a.click(); a.remove();
         log("Done — download started: " + namespace + "_disc_pack.zip", "ok");
         genBtn.disabled = false;
+    }
+
+    function cryptoRandomUUID() {
+        if (window.crypto && window.crypto.randomUUID) return window.crypto.randomUUID();
+        // Fallback for browsers without crypto.randomUUID (rare, but no-backend means no server to generate this)
+        return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, c => {
+            const r = Math.random() * 16 | 0, v = c === "x" ? r : (r & 0x3 | 0x8);
+            return v.toString(16);
+        });
     }
 
     function buildGradle() {
@@ -815,10 +1124,10 @@ maven_group=com.discpress
         return `# ${namespace} — Fabric music disc mod
 
 This is a plain resource+data bundle wrapped as a Fabric mod jar. There is
-no Java code: item textures/models, sound events, and jukebox_song entries
-under src/main/resources are picked up automatically by Minecraft the same
-way a resource pack + datapack would be, because mod jars are merged into
-both the resource and data systems.
+no Java code: item textures/models, sound events, jukebox_song entries,
+recipes and loot tables under src/main/resources are picked up automatically
+by Minecraft the same way a resource pack + datapack would be, because mod
+jars are merged into both the resource and data systems.
 
 ## Building
 
@@ -834,42 +1143,98 @@ both the resource and data systems.
 All compiling happens on your machine — nothing here is pre-built.
 `;
     }
-    function topReadme(namespace, packFormat) {
+    function geyserReadme(namespace) {
+        return `Geyser custom item mapping (v2)
+================================
+
+custom_mappings/${namespace}_discs.json uses Geyser's current v2 custom item
+format (format_version 2, "type": "definition" entries keyed by Java item and
+matched against the item's minecraft:item_model component). The old v1
+format (a flat map of custom_model_data numbers) is deprecated and is NOT
+what this pack generates.
+
+Setup:
+1. Copy custom_mappings/${namespace}_discs.json into Geyser's own
+   custom_mappings/ folder (created next to Geyser's jar / data folder after
+   its first run).
+2. Copy the contents of resource_pack/ into a Bedrock resource pack folder
+   (or zip it) and drop it into Geyser's packs/ folder. It only contains a
+   manifest and per-disc icon textures pulled from the generated disc art —
+   Geyser needs this to show the right icon in Bedrock inventories; it does
+   not affect Java players at all.
+3. Make sure gameplay.enable-custom-content: true is set in Geyser's config.
+4. Restart the server.
+
+If a disc has a crafting recipe attached, its bedrock_options.creative_category
+is set to "items" so it still shows up in the Bedrock recipe book — Bedrock
+otherwise hides recipes for custom items with no creative category.
+`;
+    }
+    function topReadme(namespace, dataFmt, rpFmt) {
         return `Disc Press output
 ==================
 
-Target version: Minecraft 26.2 (pack_format ${packFormat})
+Target version: Minecraft 26.2
+  data pack format:     ${dataFmt.join(".")}
+  resource pack format: ${rpFmt.join(".")}
+
+Both pack.mcmeta files use the current min_format/max_format pair format
+(replacing the old single "pack_format" number since 25w31a), pinned to
+exactly the 26.2 formats above.
 
 Contents
 --------
 datapack/       - drop the CONTENTS of this folder into a world's
                    .minecraft/saves/<world>/datapacks/${namespace}/ folder,
-                   or zip it and use as a datapack.
+                   or zip it and use as a datapack. Includes jukebox songs,
+                   give functions, and (if you added any) recipes/advancements
+                   and loot table files.
 resourcepack/    - same idea, goes in .minecraft/resourcepacks/, or zip it.
 fabric-mod/      - full Gradle project source. Run the build yourself
                    (see fabric-mod/README.md) — nothing is precompiled.
-geyser/          - custom_items.json for Geyser's custom item mapping
-                   system, so Bedrock players via Geyser see correct icons.
-                   Geyser needs its own mapping regardless of the resource
-                   pack; see Geyser's docs for where to place this file and
-                   how to match the custom_model_data / icon fields to a
-                   texture you add to Geyser's packaged textures.
+geyser/          - Geyser v2 custom item mappings plus a minimal Bedrock
+                   resource pack with disc icon textures. See geyser/README.md.
 
 Getting discs in-game
 ----------------------
 Each track gets its own /give command in
 datapack/data/${namespace}/function/give_all.mcfunction — run it as
 /function ${namespace}:give_all (or the per-track functions) once the
-datapack is loaded.
+datapack is loaded. /give commands use the current item-component SNBT
+syntax (custom_name={text:"..."}), not the pre-1.21.5 JSON-string style.
+
+Loot tables
+-----------
+Any loot placements you configured land under datapack/data/<ns>/loot_table/.
+"Standalone" placements live under this pack's own namespace and are always
+safe to add — they never touch another file. "Override" placements write
+directly to the path you specified (including vanilla paths like
+minecraft:chests/village/village_weaponsmith); Disc Press has no way to know
+what's already in a vanilla loot table at that path, so an override REPLACES
+the whole file rather than merging into it. If you want the vanilla drops to
+keep working alongside your disc, either extract the vanilla table's JSON
+yourself (e.g. from a generated data report) and fold its pools into the
+overridden file, or point a "standalone" table at your own namespace instead
+and reference it from a custom container/mob you control.
+
+Crafting recipes
+-----------------
+Recipes are always written under this pack's own namespace
+(datapack/data/${namespace}/recipe/), so they never conflict with anything
+vanilla. Unless you unchecked auto-unlock, each recipe also gets a small
+advancement under data/${namespace}/advancement/recipes/ that grants it to
+every player automatically (the standard "child of minecraft:recipes/root,
+triggered by minecraft:tick" trick) — no crafting-table discovery required.
 
 Notes on 26.2
 -------------
-26.2 uses the new item-component system: item_model, jukebox_playable,
-custom_name and lore are all set directly on the item stack via the give
-command rather than through legacy NBT tags. pack_format ${packFormat}
-matches the Java Edition 26.2 release; if Mojang ships a later 26.x drop
-before you use this, bump the pack_format value in both pack.mcmeta files
-to match (check the Minecraft Wiki's version page for the new number).
+26.2 uses the new item-component system throughout: item_model,
+jukebox_playable, custom_name, lore and recipe results with "components"
+are all set via item components rather than legacy NBT tags. Commands (like
+the /give lines above) are parsed as SNBT, which is why component values use
+unquoted compound keys, e.g. {text:"..."} — wrapping a whole component in an
+extra pair of quotes (valid in some pre-1.21.5 tutorials) turns it into a
+literal string instead of a parsed component and silently breaks the name/lore.
 
 Only the resourcepack and datapack are needed for a vanilla server/client
 combo. Use fabric-mod instead of (or alongside) them if you want the discs
@@ -882,4 +1247,6 @@ bundled as an actual mod, e.g. for a modded Fabric server.
     /* preload template as soon as possible */
     loadTemplate();
     refreshEmpty();
+    renderLootList();
+    renderRecipeList();
 })();
