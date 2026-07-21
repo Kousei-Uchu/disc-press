@@ -618,7 +618,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     async function generateAll() {
         const namespace = ($("#namespace").value.trim() || "customdiscs").toLowerCase().replace(/[^a-z0-9_.-]/g, "_");
         const packName = $("#packname").value.trim() || "Custom Discs";
-        const baseDiscItem = $("#baseDiscItem").value || "minecraft:music_disc_5";
+        const baseDiscItem = "minecraft:music_disc_pigstep";
         if (!tracks.length) return;
 
         genBtn.disabled = true;
