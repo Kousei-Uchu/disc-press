@@ -887,7 +887,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
 
             // datapack: jukebox_song
             const jukeboxJson = {
-                sound_event: soundEventId,
+                sound_event: { sound_id: soundEventId },
                 description: { translate: langKey },
                 length_in_seconds: t.duration,
                 comparator_output: comparatorFor(t.duration)
