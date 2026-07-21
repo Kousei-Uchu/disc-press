@@ -37,13 +37,6 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     function sanitizeNamespace(n) {
         return (n || "").trim().toLowerCase().replace(/[^a-z0-9_.-]/g, "_") || "minecraft";
     }
-    /* Splits "namespace:some/path" into parts; bare "some/path" falls back to defaultNs. */
-    function parseResourceLocation(id, defaultNs) {
-        const raw = (id || "").trim();
-        const idx = raw.indexOf(":");
-        if (idx === -1) return { namespace: sanitizeNamespace(defaultNs), path: sanitizeResourcePath(raw) };
-        return { namespace: sanitizeNamespace(raw.slice(0, idx)), path: sanitizeResourcePath(raw.slice(idx + 1)) };
-    }
 
     /* Escapes a JS string into a double-quoted SNBT string literal, e.g. for use
        inside a /give command's item component brackets: custom_name={text:"..."} .
@@ -218,11 +211,15 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         const ctx = canvas.getContext("2d");
         const out = ctx.createImageData(w, h);
 
+        // Alpha is clamped to fully opaque (255) or fully transparent (0) — no
+        // partial/antialiased edge pixels — so template edges stay crisp instead
+        // of blending toward black at low opacity.
         function applyLayer(layer, color) {
             for (let p = 0; p < w * h; p++) {
                 const i = p * 4;
                 const brightness = layer.data.data[i] / 255;
-                out.data[i + 3] = alpha > 128 ? 255 : 0;
+                const rawAlpha = layer.data.data[i + 3];
+                const alpha = rawAlpha > 127 ? 255 : 0;
                 if (alpha === 0) continue;
                 out.data[i] = color.r * brightness;
                 out.data[i + 1] = color.g * brightness;
@@ -250,31 +247,15 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
 
     /* ---------------- state ---------------- */
     const tracks = []; // {id, file, title, artist, cover(dataURL|null), colors, canvas, oggBlob, duration, status}
-    const usedIds = new Set();
-    const lootEntries = []; // {id, trackId, mode, tableId, tableType, rolls, chance}
-    const recipes = [];     // {id, trackId, kind, cells[9]|ingredients[], autoUnlock}
-    const usedResourceIds = new Set(); // recipe / loot ids within the project namespace
+    const usedIds = new Set(["blank_disc"]); // reserved — never let a track collide with the blank disc's id
+    const usedResourceIds = new Set(); // recipe / advancement ids within the project namespace
 
     const tracksEl = $("#tracks"), emptyMsg = $("#emptyMsg"), genBtn = $("#generateBtn"), genHint = $("#genHint");
-    const lootTrackSelect = $("#lootTrackSelect"), recipeTrackSelect = $("#recipeTrackSelect");
-    const lootListEl = $("#lootList"), recipeListEl = $("#recipeList");
 
     function refreshEmpty() {
         emptyMsg.style.display = tracks.length ? "none" : "block";
         genBtn.disabled = tracks.length === 0;
         genHint.textContent = tracks.length ? tracks.length + " track(s) ready." : "Add at least one track to enable this.";
-        updateTrackSelects();
-    }
-
-    function updateTrackSelects() {
-        [lootTrackSelect, recipeTrackSelect].forEach(sel => {
-            if (!sel) return;
-            const prev = sel.value;
-            sel.innerHTML = tracks.length
-                ? tracks.map(t => `<option value="${t.id}">${(t.title || t.file.name).replace(/"/g, "&quot;")}</option>`).join("")
-                : `<option value="">Add a track first…</option>`;
-            if (tracks.some(t => t.id === prev)) sel.value = prev;
-        });
     }
 
     async function addFile(file) {
@@ -300,8 +281,15 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             if (tags.title) track.title = tags.title;
             if (tags.artist) track.artist = tags.artist;
 
+            // Prefer an id built from "title_artist" (the tagged metadata) over the
+            // filename-derived one assigned above, once we actually have both. The
+            // DOM element was already created under the old id, so its id attribute
+            // is renamed in place rather than creating a second, orphaned element.
             if (tags.title && tags.artist) {
-                track.id = uniqueId(slugify(track.title. + "_" + track.artist), usedIds);
+                const oldEl = document.getElementById("track-" + track.id);
+                usedIds.delete(track.id);
+                track.id = uniqueId(slugify(track.title + "_" + track.artist), usedIds);
+                if (oldEl) oldEl.id = "track-" + track.id;
             }
 
             let imgData = null;
@@ -326,7 +314,6 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             console.error(err);
         }
         renderTrack(track);
-        updateTrackSelects();
     }
 
     function fauxImageDataFromString(str) {
@@ -396,7 +383,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             img.onload = () => { const ctx = cnv.getContext("2d"); ctx.imageSmoothingEnabled = false; ctx.drawImage(img, 0, 0, 16, 16); };
             img.src = cnv.dataset.src;
         }
-        el.querySelector('[data-field="title"]').addEventListener("input", (e) => { t.title = e.target.value; updateTrackSelects(); });
+        el.querySelector('[data-field="title"]').addEventListener("input", (e) => { t.title = e.target.value; });
         el.querySelector('[data-field="artist"]').addEventListener("input", (e) => { t.artist = e.target.value; });
         el.querySelectorAll('.swatch[data-color]').forEach(sw => {
             sw.addEventListener("click", () => openColorModal(t, sw.dataset.color));
@@ -406,11 +393,6 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             if (idx >= 0) tracks.splice(idx, 1);
             usedIds.delete(t.id);
             el.remove();
-            // drop any loot/recipe entries that referenced this track
-            for (let i = lootEntries.length - 1; i >= 0; i--) if (lootEntries[i].trackId === t.id) lootEntries.splice(i, 1);
-            for (let i = recipes.length - 1; i >= 0; i--) if (recipes[i].trackId === t.id) recipes.splice(i, 1);
-            renderLootList();
-            renderRecipeList();
             refreshEmpty();
         });
     }
@@ -533,121 +515,6 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         handleFileList(dropped);
     });
 
-    /* ---------------- loot table placements ---------------- */
-    const addLootBtn = $("#addLootBtn");
-    if (addLootBtn) addLootBtn.addEventListener("click", () => {
-        const trackId = lootTrackSelect.value;
-        if (!trackId) { log("Add a track before adding a loot placement.", "err"); return; }
-        const tableIdRaw = $("#lootTableId").value.trim();
-        if (!tableIdRaw) { $("#lootTableId").style.borderColor = "var(--err)"; return; }
-        $("#lootTableId").style.borderColor = "";
-        const entry = {
-            id: "loot_" + Math.random().toString(36).slice(2, 9),
-            trackId,
-            mode: $("#lootMode").value,
-            tableId: tableIdRaw,
-            tableType: $("#lootTableType").value,
-            rolls: Math.max(1, parseInt($("#lootRolls").value, 10) || 1),
-            chance: (() => { const v = parseFloat($("#lootChance").value); return isFinite(v) && v > 0 && v < 1 ? v : null; })()
-        };
-        lootEntries.push(entry);
-        renderLootList();
-    });
-
-    function renderLootList() {
-        if (!lootListEl) return;
-        if (!lootEntries.length) { lootListEl.innerHTML = `<div class="hint">No loot placements added yet.</div>`; return; }
-        lootListEl.innerHTML = lootEntries.map(e => {
-            const t = tracks.find(tr => tr.id === e.trackId);
-            const trackName = t ? (t.title || t.file.name) : "(removed track)";
-            const modeTag = e.mode === "override"
-                ? `<span class="status-chip err">override</span>`
-                : `<span class="status-chip ok">standalone</span>`;
-            return `<div class="entry-row" data-id="${e.id}">
-        <div class="entry-main">
-          <strong>${trackName.replace(/</g, "&lt;")}</strong> → <code>${e.tableId.replace(/</g, "&lt;")}</code>
-          ${modeTag}
-          <span class="hint" style="margin:0">rolls ${e.rolls}${e.chance ? `, ${(e.chance * 100).toFixed(0)}% chance` : ""}, ${e.tableType} table</span>
-        </div>
-        <button class="btn-remove" data-remove-loot>Remove</button>
-      </div>`;
-        }).join("");
-        lootListEl.querySelectorAll("[data-remove-loot]").forEach(btn => {
-            btn.addEventListener("click", (e) => {
-                const id = e.target.closest(".entry-row").dataset.id;
-                const idx = lootEntries.findIndex(x => x.id === id);
-                if (idx >= 0) lootEntries.splice(idx, 1);
-                renderLootList();
-            });
-        });
-    }
-
-    /* ---------------- crafting recipes ---------------- */
-    const recipeGridEl = $("#recipeGrid");
-    const recipeTypeEl = $("#recipeType");
-    let recipeCells = new Array(9).fill("");
-
-    function renderRecipeGrid() {
-        if (!recipeGridEl) return;
-        const shapeless = recipeTypeEl.value === "shapeless";
-        recipeGridEl.className = "recipe-grid" + (shapeless ? " shapeless" : "");
-        recipeGridEl.innerHTML = new Array(9).fill(0).map((_, i) =>
-            `<input type="text" class="recipe-cell" data-i="${i}" placeholder="${shapeless ? "item id" : (i === 4 ? "center" : "—")}" value="${(recipeCells[i] || "").replace(/"/g, "&quot;")}">`
-        ).join("");
-        recipeGridEl.querySelectorAll(".recipe-cell").forEach(inp => {
-            inp.addEventListener("input", (e) => { recipeCells[e.target.dataset.i] = e.target.value.trim(); });
-        });
-    }
-    if (recipeTypeEl) { recipeTypeEl.addEventListener("change", renderRecipeGrid); renderRecipeGrid(); }
-
-    const addRecipeBtn = $("#addRecipeBtn");
-    if (addRecipeBtn) addRecipeBtn.addEventListener("click", () => {
-        const trackId = recipeTrackSelect.value;
-        if (!trackId) { log("Add a track before adding a recipe.", "err"); return; }
-        const kind = recipeTypeEl.value;
-        const cells = recipeCells.map(c => (c || "").trim());
-        const filled = cells.filter(Boolean);
-        if (!filled.length) { log("Fill in at least one crafting grid cell.", "err"); return; }
-        const recipe = {
-            id: "recipe_" + Math.random().toString(36).slice(2, 9),
-            trackId, kind,
-            cells: cells.slice(),
-            autoUnlock: $("#recipeAutoUnlock").checked
-        };
-        recipes.push(recipe);
-        recipeCells = new Array(9).fill("");
-        renderRecipeGrid();
-        renderRecipeList();
-    });
-
-    function renderRecipeList() {
-        if (!recipeListEl) return;
-        if (!recipes.length) { recipeListEl.innerHTML = `<div class="hint">No recipes added yet.</div>`; return; }
-        recipeListEl.innerHTML = recipes.map(r => {
-            const t = tracks.find(tr => tr.id === r.trackId);
-            const trackName = t ? (t.title || t.file.name) : "(removed track)";
-            const summary = r.kind === "shapeless"
-                ? r.cells.filter(Boolean).join(" + ")
-                : "3×3 shaped grid (" + r.cells.filter(Boolean).length + " item(s) placed)";
-            return `<div class="entry-row" data-id="${r.id}">
-        <div class="entry-main">
-          <strong>${trackName.replace(/</g, "&lt;")}</strong>
-          <span class="status-chip ${r.kind === "shapeless" ? "busy" : "ok"}">${r.kind}</span>
-          <span class="hint" style="margin:0">${summary.replace(/</g, "&lt;")}${r.autoUnlock ? "" : " · manual unlock"}</span>
-        </div>
-        <button class="btn-remove" data-remove-recipe>Remove</button>
-      </div>`;
-        }).join("");
-        recipeListEl.querySelectorAll("[data-remove-recipe]").forEach(btn => {
-            btn.addEventListener("click", (e) => {
-                const id = e.target.closest(".entry-row").dataset.id;
-                const idx = recipes.findIndex(x => x.id === id);
-                if (idx >= 0) recipes.splice(idx, 1);
-                renderRecipeList();
-            });
-        });
-    }
-
     /* ---------------- ffmpeg (audio -> ogg vorbis) ---------------- */
     let ffmpegInstance = null;
 
@@ -715,81 +582,43 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         });
     }
 
-    /* The set of item-component overrides that make base music_disc_pigstep into this
-       specific custom disc. Shared by the /give command, loot table set_components
-       function, and recipe result — so all three ways of obtaining a disc agree. */
+    /* The set of item-component overrides that make the base disc item into this
+       specific custom disc. Shared by the /give command, the stonecutting recipe
+       result, and the villager-trade sell item — so every way of obtaining a disc
+       agrees on what it looks like and sounds like. */
     function discComponents(t, namespace) {
         return {
             item_model: `${namespace}:${t.id}`,
-            jukebox_playable: `${namespace}:${t.id}`
+            jukebox_playable: `${namespace}:${t.id}`,
+            custom_name: { text: t.title || "Unknown Title" },
+            lore: [{ text: t.artist || "Unknown Artist", italic: true, color: "gray" }]
         };
     }
 
-    function buildLootTable(entry, components) {
-        const typeMap = {
-            chest: "minecraft:chest",
-            entity: "minecraft:entity",
-            block: "minecraft:block",
-            generic: "minecraft:generic"
-        };
-        const itemEntry = {
-            type: "minecraft:item",
-            name: "minecraft:music_disc_pigstep",
-            functions: [
-                { function: "minecraft:set_components", components, mode: "merge" }
-            ]
-        };
-        if (entry.chance) {
-            itemEntry.conditions = [{ condition: "minecraft:random_chance", chance: entry.chance }];
-        }
+    function autoUnlockAdvancement(namespace, recipeId) {
+        // Standard datapack technique: minecraft:recipes/root is an invisible
+        // advancement every player has by default (it anchors the recipe book
+        // tabs), so granting a child of it via a trigger that fires immediately
+        // unlocks the recipe for everyone without any extra criteria.
         return {
-            type: typeMap[entry.tableType] || "minecraft:generic",
-            pools: [{ rolls: entry.rolls, entries: [itemEntry] }]
+            parent: "minecraft:recipes/root",
+            criteria: { unlock: { trigger: "minecraft:tick" } },
+            rewards: { recipes: [`${namespace}:${recipeId}`] }
         };
     }
 
-    function buildRecipeJson(recipe, components) {
-        const result = { id: "minecraft:music_disc_pigstep", count: 1, components };
-        if (recipe.kind === "shapeless") {
-            return {
-                type: "minecraft:crafting_shapeless",
-                category: "misc",
-                ingredients: recipe.cells.filter(Boolean),
-                result
-            };
-        }
-        // shaped: map the 3x3 cell grid to unique symbols
-        const symbolFor = new Map();
-        let next = 65; // 'A'
-        const key = {};
-        const rows = [0, 1, 2].map(r => {
-            let row = "";
-            for (let c = 0; c < 3; c++) {
-                const item = recipe.cells[r * 3 + c];
-                if (!item) { row += " "; continue; }
-                if (!symbolFor.has(item)) {
-                    const sym = String.fromCharCode(next++);
-                    symbolFor.set(item, sym);
-                    key[sym] = item;
-                }
-                row += symbolFor.get(item);
-            }
-            return row;
-        });
-        // trim fully-empty leading/trailing columns/rows so the pattern isn't
-        // unnecessarily padded (Minecraft allows this, but keep it tidy)
+    function buildStonecuttingRecipe(ingredientItem, resultItem, components) {
         return {
-            type: "minecraft:crafting_shaped",
-            category: "misc",
-            pattern: rows,
-            key,
-            result
+            type: "minecraft:stonecutting",
+            ingredient: ingredientItem,
+            result: { id: resultItem, count: 1, components }
         };
     }
 
     async function generateAll() {
         const namespace = ($("#namespace").value.trim() || "customdiscs").toLowerCase().replace(/[^a-z0-9_.-]/g, "_");
         const packName = $("#packname").value.trim() || "Custom Discs";
+        const baseDiscItem = $("#baseDiscItem").value || "minecraft:music_disc_5";
         if (!tracks.length) return;
 
         genBtn.disabled = true;
@@ -856,20 +685,16 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         const geyserItemTexDir = geyserRp.folder("textures").folder("items");
 
         const giveLines = [];
-        const geyserItems = []; // v2 "definition" entries
+        const geyserItems = []; // v2 "definition" entries for the real, playable discs
         const geyserTextureEntries = {}; // item_texture.json texture_data entries
         const soundsJson = {};
         const modSoundsJson = {};
-        const pngByTrackId = {};
-        const recipeUnlocks = {}; // trackId -> track has a recipe, used for geyser creative_category
-
-        for (const r of recipes) recipeUnlocks[r.trackId] = true;
 
         let i = 0;
         for (const t of tracks) {
             i++;
             log(`[${i}/${tracks.length}] ${t.file.name} → converting to OGG Vorbis…`);
-            setProgress(5 + (i - 1) / tracks.length * 60);
+            setProgress(5 + (i - 1) / tracks.length * 55);
             let oggBlob;
             try {
                 oggBlob = await convertToOgg(t);
@@ -879,7 +704,6 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             }
             const oggBytes = new Uint8Array(await oggBlob.arrayBuffer());
             const pngBytes = await canvasToPngBytes(t.canvas);
-            pngByTrackId[t.id] = pngBytes;
             const id = t.id;
             const title = t.title || "Unknown Title";
             const artist = t.artist || "Unknown Artist";
@@ -914,7 +738,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
 
             soundsDir.file(id + ".ogg", oggBytes);
             modSoundsDir.file(id + ".ogg", oggBytes);
-            soundsJson[id] = { sounds: [{"name": `${namespace}:records/${id}`, "stream": true}], subtitle: langKey };
+            soundsJson[id] = { sounds: [{ name: `${namespace}:records/${id}`, stream: true }], subtitle: langKey };
             modSoundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
 
             // give command — item components are parsed as SNBT, not JSON. custom_name
@@ -924,87 +748,117 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             const nameComp = `{text:${snbtStr(title)}}`;
             const loreComp = `[{text:${snbtStr(artist)},italic:true,color:"gray"}]`;
             giveLines.push(
-                `give @s minecraft:music_disc_pigstep[item_model="${namespace}:${id}",jukebox_playable="${soundEventId}"]`
+                `give @s ${baseDiscItem}[item_model="${namespace}:${id}",jukebox_playable="${soundEventId}",custom_name=${nameComp},lore=${loreComp}]`
             );
 
             // Geyser v2 custom item definition — maps the item_model value above to a
-            // Bedrock custom item. format_version 1 / the old customModelData keyed
-            // structure is deprecated; this uses the current predicate-based v2 schema.
+            // Bedrock custom item. Every track always has a stonecutter recipe (below),
+            // so creative_category is always "items" so Bedrock's recipe book shows it.
             const bedrockId = `${namespace}:${id}`;
-            const hasRecipe = !!recipeUnlocks[id];
             geyserItems.push({
                 type: "definition",
                 model: `${namespace}:${id}`,
                 bedrock_identifier: bedrockId,
-                bedrock_options: {
-                    icon: bedrockId,
-                    // Bedrock only shows recipes for custom items in the recipe book
-                    // if a creative_category is set — matters if this disc has a
-                    // crafting recipe attached below.
-                    creative_category: hasRecipe ? "items" : "none"
-                }
+                display_name: `${title} - ${artist}`,
+                bedrock_options: { icon: bedrockId, creative_category: "items" }
             });
             geyserTextureEntries[bedrockId] = { textures: [`textures/items/${id}`] };
             geyserItemTexDir.file(id + ".png", pngBytes);
 
             log(`  ✓ ${title} — ${artist} (${t.duration}s, comparator ${comparatorFor(t.duration)})`, "ok");
-            setProgress(5 + i / tracks.length * 60);
+            setProgress(5 + i / tracks.length * 55);
         }
 
         rpNs.file("sounds.json", JSON.stringify(soundsJson, null, 2));
         modAssetsNs.file("sounds.json", JSON.stringify(modSoundsJson, null, 2));
-        rpNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
-        modAssetsNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
 
         fnDir.file("give_all.mcfunction", giveLines.join("\n") + "\n");
         giveLines.forEach((line, idx) => fnDir.file(`give_${tracks[idx] ? tracks[idx].id : idx}.mcfunction`, line + "\n"));
 
-        // ---- loot table placements ----
-        setProgress(68);
-        if (lootEntries.length) log(`Writing ${lootEntries.length} loot table placement(s)…`);
-        for (const entry of lootEntries) {
-            const t = tracks.find(tr => tr.id === entry.trackId);
-            if (!t) continue;
-            const defaultNs = entry.mode === "override" ? "minecraft" : namespace;
-            const { namespace: tblNs, path: tblPath } = parseResourceLocation(entry.tableId, defaultNs);
-            if (!tblPath) { log(`  skipped loot placement for ${t.title}: empty table path`, "err"); continue; }
-            const table = buildLootTable(entry, discComponents(t, namespace));
-            const targetFolder = dataFolderFor(tblNs).folder("loot_table");
-            // JSZip folder("a/b/c") handles nested paths fine
-            const parts = tblPath.split("/");
-            const fileName = parts.pop() + ".json";
-            const nestedFolder = parts.length ? targetFolder.folder(parts.join("/")) : targetFolder;
-            nestedFolder.file(fileName, JSON.stringify(table, null, 2));
-            if (entry.mode === "override") {
-                log(`  ⚠ overriding ${tblNs}:${tblPath} — this REPLACES that loot table file entirely, it does not merge with vanilla's other drops`, "err");
-            } else {
-                log(`  ✓ standalone loot table ${tblNs}:${tblPath} (${t.title})`, "ok");
-            }
+        // ---- blank disc (Knowledge Book reskin) + librarian trade ----
+        setProgress(64);
+        log("Building blank disc + librarian trade…");
+        const blankId = "blank_disc";
+        const blankBaseItem = "minecraft:knowledge_book";
+
+        // White main + white ring: a plain, unlabeled-looking blank. No jukebox_playable
+        // at all — this item has no jukebox function of its own, it's purely a
+        // stonecutter ingredient.
+        const blankCanvas = buildTexture({ r: 255, g: 255, b: 255 }, { r: 255, g: 255, b: 255 });
+        const blankPng = await canvasToPngBytes(blankCanvas);
+
+        const blankModelJson = { parent: "minecraft:item/generated", textures: { layer0: `${namespace}:item/${blankId}` } };
+        modelsDir.file(blankId + ".json", JSON.stringify(blankModelJson, null, 2));
+        modModelsDir.file(blankId + ".json", JSON.stringify(blankModelJson, null, 2));
+        const blankItemDefJson = { model: { type: "minecraft:model", model: `${namespace}:item/${blankId}` } };
+        itemsDir.file(blankId + ".json", JSON.stringify(blankItemDefJson, null, 2));
+        modItemsDir.file(blankId + ".json", JSON.stringify(blankItemDefJson, null, 2));
+        texDir.file(blankId + ".png", blankPng);
+        modTexDir.file(blankId + ".png", blankPng);
+
+        const blankComponents = {
+            item_model: `${namespace}:${blankId}`,
+            custom_name: { text: "Blank Disc" }
+        };
+
+        fnDir.file("give_blank_disc.mcfunction",
+            `give @s ${blankBaseItem}[item_model="${namespace}:${blankId}",custom_name={text:"Blank Disc"}]\n`
+        );
+
+        geyserItems.push({
+            type: "definition",
+            model: `${namespace}:${blankId}`,
+            bedrock_identifier: `${namespace}:${blankId}`,
+            display_name: "Blank Disc",
+            bedrock_options: { icon: `${namespace}:${blankId}`, creative_category: "none" }
+        });
+        geyserTextureEntries[`${namespace}:${blankId}`] = { textures: [`textures/items/${blankId}`] };
+        geyserItemTexDir.file(blankId + ".png", blankPng);
+
+        // Villager trades have no data-pack registry — there's no vanilla file format to
+        // declare one. This runs every tick, finds level-5 librarians who haven't been
+        // given the trade yet (tracked via a tag so it's only injected once each), and
+        // appends it straight to their Offers.Recipes. Entity-held item stacks here still
+        // use the pre-1.20.5 "Count" field (capital, alongside the modern "components"
+        // map) — different from the lowercase "count" used in the recipe JSON below.
+        const tradeTag = `${namespace}_blank_trade_added`;
+        const tradeOffer = {
+            buy: { id: "minecraft:emerald", Count: 16 },
+            buyB: { id: "minecraft:amethyst_shard", Count: 1 },
+            sell: { id: blankBaseItem, Count: 1, components: blankComponents },
+            maxUses: 12,
+            uses: 0,
+            xp: 5,
+            priceMultiplier: 0.05,
+            rewardExp: true
+        };
+        fnDir.file("inject_blank_trade.mcfunction",
+            `data modify entity @s Offers.Recipes append value ${JSON.stringify(tradeOffer)}\n` +
+            `tag @s add ${tradeTag}\n`
+        );
+        fnDir.file("add_blank_trade.mcfunction",
+            `execute as @e[type=minecraft:villager,nbt={VillagerData:{profession:"minecraft:librarian",level:5}},tag=!${tradeTag}] at @s run function ${namespace}:inject_blank_trade\n`
+        );
+        // Hooks into the tick tag; merges with other datapacks' tick tags by default
+        // (no "replace" key means merge, not overwrite).
+        dataFolderFor("minecraft").folder("tags").folder("function").file("tick.json",
+            JSON.stringify({ values: [`${namespace}:add_blank_trade`] }, null, 2)
+        );
+        log("  ✓ blank disc + level-5 librarian trade (16 emeralds + 1 amethyst shard)", "ok");
+
+        // ---- stonecutting: blank disc -> each custom disc (one-way only) ----
+        setProgress(80);
+        log(`Writing stonecutting recipes for ${tracks.length} disc(s)…`);
+        for (const t of tracks) {
+            const comps = discComponents(t, namespace);
+            const toId = uniqueId(slugify(t.title) + "_from_blank", usedResourceIds);
+            recipeDir.file(toId + ".json", JSON.stringify(buildStonecuttingRecipe(blankBaseItem, baseDiscItem, comps), null, 2));
+            advDir.file(toId + ".json", JSON.stringify(autoUnlockAdvancement(namespace, toId), null, 2));
+            log(`  ✓ stonecutter: blank disc → ${t.title}`, "ok");
         }
 
-        // ---- crafting recipes ----
-        setProgress(74);
-        if (recipes.length) log(`Writing ${recipes.length} crafting recipe(s)…`);
-        for (const recipe of recipes) {
-            const t = tracks.find(tr => tr.id === recipe.trackId);
-            if (!t) continue;
-            const recId = uniqueId(slugify(t.title) + "_recipe", usedResourceIds);
-            const recipeJson = buildRecipeJson(recipe, discComponents(t, namespace));
-            recipeDir.file(recId + ".json", JSON.stringify(recipeJson, null, 2));
-            if (recipe.autoUnlock) {
-                // Standard datapack technique: minecraft:recipes/root is an invisible
-                // advancement every player has by default (it anchors the recipe book
-                // tabs), so granting a child of it via a trigger that fires immediately
-                // unlocks the recipe for everyone without any extra criteria.
-                const advJson = {
-                    parent: "minecraft:recipes/root",
-                    criteria: { unlock: { trigger: "minecraft:tick" } },
-                    rewards: { recipes: [`${namespace}:${recId}`] }
-                };
-                advDir.file(recId + ".json", JSON.stringify(advJson, null, 2));
-            }
-            log(`  ✓ recipe ${namespace}:${recId} (${recipe.kind}) → ${t.title}`, "ok");
-        }
+        rpNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
+        modAssetsNs.folder("lang").file("en_us.json", JSON.stringify(langEntries, null, 2));
 
         // ---- fabric.mod.json ----
         const fabricModJson = {
@@ -1026,10 +880,13 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         mod.file("README.md", modReadme(namespace));
 
         // ---- geyser mapping (v2) + minimal Bedrock resource pack for icons ----
-        setProgress(80);
+        setProgress(90);
         geyserMappingsDir.file(namespace + "_discs.json", JSON.stringify({
             format_version: 2,
-            items: { "minecraft:music_disc_pigstep": geyserItems }
+            items: {
+                [baseDiscItem]: geyserItems.filter(it => it.model !== `${namespace}:${blankId}`),
+                [blankBaseItem]: geyserItems.filter(it => it.model === `${namespace}:${blankId}`)
+            }
         }, null, 2));
 
         const rpUuid1 = cryptoRandomUUID(), rpUuid2 = cryptoRandomUUID();
@@ -1051,11 +908,11 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         }, null, 2));
         geyser.file("README.md", geyserReadme(namespace));
 
-        zip.file("README.txt", topReadme(namespace, DATA_PACK_FORMAT, RESOURCE_PACK_FORMAT));
+        zip.file("README.txt", topReadme(namespace, DATA_PACK_FORMAT, RESOURCE_PACK_FORMAT, baseDiscItem));
 
-        setProgress(90);
+        setProgress(95);
         log("Packing zip…");
-        const blob = await zip.generateAsync({ type: "blob" }, (meta) => { setProgress(90 + meta.percent / 10); });
+        const blob = await zip.generateAsync({ type: "blob" }, (meta) => { setProgress(95 + meta.percent / 20); });
         setProgress(100);
         const url = URL.createObjectURL(blob);
         const a = document.createElement("a");
@@ -1126,9 +983,10 @@ maven_group=com.discpress
 
 This is a plain resource+data bundle wrapped as a Fabric mod jar. There is
 no Java code: item textures/models, sound events, jukebox_song entries,
-recipes and loot tables under src/main/resources are picked up automatically
-by Minecraft the same way a resource pack + datapack would be, because mod
-jars are merged into both the resource and data systems.
+the blank-disc stonecutting recipes, and the trade-injection function under
+src/main/resources are picked up automatically by Minecraft the same way a
+resource pack + datapack would be, because mod jars are merged into both
+the resource and data systems.
 
 ## Building
 
@@ -1154,6 +1012,10 @@ matched against the item's minecraft:item_model component). The old v1
 format (a flat map of custom_model_data numbers) is deprecated and is NOT
 what this pack generates.
 
+There are two groups of entries: the real, playable discs (keyed under
+whichever vanilla disc item you picked in the tool) and the blank disc
+(keyed under minecraft:knowledge_book).
+
 Setup:
 1. Copy custom_mappings/${namespace}_discs.json into Geyser's own
    custom_mappings/ folder (created next to Geyser's jar / data folder after
@@ -1166,12 +1028,13 @@ Setup:
 3. Make sure gameplay.enable-custom-content: true is set in Geyser's config.
 4. Restart the server.
 
-If a disc has a crafting recipe attached, its bedrock_options.creative_category
-is set to "items" so it still shows up in the Bedrock recipe book — Bedrock
-otherwise hides recipes for custom items with no creative category.
+Every real disc always has a matching stonecutter recipe, so its
+creative_category is always "items" (so it shows up in Bedrock's recipe
+book). The blank disc has no recipe producing it (it only comes from the
+librarian trade), so its creative_category is "none".
 `;
     }
-    function topReadme(namespace, dataFmt, rpFmt) {
+    function topReadme(namespace, dataFmt, rpFmt, baseDiscItem) {
         return `Disc Press output
 ==================
 
@@ -1188,8 +1051,8 @@ Contents
 datapack/       - drop the CONTENTS of this folder into a world's
                    .minecraft/saves/<world>/datapacks/${namespace}/ folder,
                    or zip it and use as a datapack. Includes jukebox songs,
-                   give functions, and (if you added any) recipes/advancements
-                   and loot table files.
+                   give functions, the blank-disc trade-injection function,
+                   and the stonecutting recipes/advancements.
 resourcepack/    - same idea, goes in .minecraft/resourcepacks/, or zip it.
 fabric-mod/      - full Gradle project source. Run the build yourself
                    (see fabric-mod/README.md) — nothing is precompiled.
@@ -1198,34 +1061,34 @@ geyser/          - Geyser v2 custom item mappings plus a minimal Bedrock
 
 Getting discs in-game
 ----------------------
-Each track gets its own /give command in
-datapack/data/${namespace}/function/give_all.mcfunction — run it as
-/function ${namespace}:give_all (or the per-track functions) once the
-datapack is loaded. /give commands use the current item-component SNBT
-syntax (custom_name={text:"..."}), not the pre-1.21.5 JSON-string style.
+Every real disc is built on top of ${baseDiscItem} — its name, texture,
+model and sound are swapped via item components, but the underlying item
+stays that one vanilla disc. Each track's own function is at
+datapack/data/${namespace}/function/give_<id>.mcfunction, and give_all.mcfunction
+runs every one of them at once. /give commands use the current item-component
+SNBT syntax (custom_name={text:"..."}), not the pre-1.21.5 JSON-string style.
 
-Loot tables
------------
-Any loot placements you configured land under datapack/data/<ns>/loot_table/.
-"Standalone" placements live under this pack's own namespace and are always
-safe to add — they never touch another file. "Override" placements write
-directly to the path you specified (including vanilla paths like
-minecraft:chests/village/village_weaponsmith); Disc Press has no way to know
-what's already in a vanilla loot table at that path, so an override REPLACES
-the whole file rather than merging into it. If you want the vanilla drops to
-keep working alongside your disc, either extract the vanilla table's JSON
-yourself (e.g. from a generated data report) and fold its pools into the
-overridden file, or point a "standalone" table at your own namespace instead
-and reference it from a custom container/mob you control.
+Blank disc & the stonecutter
+------------------------------
+Trade 16 emeralds + 1 amethyst shard with a level 5 (master) librarian for a
+blank disc. Vanilla has no data-pack registry for villager trades, so this is
+done with a function (data/${namespace}/function/add_blank_trade.mcfunction,
+hooked into the #minecraft:tick function tag) that finds level-5 librarians
+who haven't received the trade yet and injects it directly into their
+Offers.Recipes, tagging them afterward so it's only added once per villager.
 
-Crafting recipes
------------------
-Recipes are always written under this pack's own namespace
-(datapack/data/${namespace}/recipe/), so they never conflict with anything
-vanilla. Unless you unchecked auto-unlock, each recipe also gets a small
-advancement under data/${namespace}/advancement/recipes/ that grants it to
-every player automatically (the standard "child of minecraft:recipes/root,
-triggered by minecraft:tick" trick) — no crafting-table discovery required.
+The blank disc itself is a reskinned minecraft:knowledge_book — an all-white
+label, and deliberately given no jukebox_playable component, so it has no
+function of its own beyond being a stonecutter ingredient. Put it in a
+stonecutter to turn it into any of your custom discs
+(data/${namespace}/recipe/<id>_from_blank.json). There is intentionally no
+disc-to-blank conversion.
+
+Knowledge books have no natural source in survival and aren't offered in the
+creative menu, so — unlike an approach built on a second copy of a vanilla
+disc — nothing else a player might be holding can trigger these stonecutting
+recipes by accident. The real, playable discs never have to serve double
+duty as a stonecutter ingredient.
 
 Notes on 26.2
 -------------
@@ -1248,6 +1111,4 @@ bundled as an actual mod, e.g. for a modded Fabric server.
     /* preload template as soon as possible */
     loadTemplate();
     refreshEmpty();
-    renderLootList();
-    renderRecipeList();
 })();
