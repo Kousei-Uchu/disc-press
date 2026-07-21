@@ -184,7 +184,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     // going flat: shadows (multiplier < 1) still crush toward the base color, but
     // raised/highlighted areas get an additive kick regardless of how dark the
     // base color is.
-    const HIGHLIGHT_STRENGTH = 90;
+    const HIGHLIGHT_STRENGTH = 50;
     // Excess above the average (multiplier - 1) is clamped to this before being
     // scaled by HIGHLIGHT_STRENGTH, so a few blown-out template pixels can't
     // produce absurdly large additive spikes.
