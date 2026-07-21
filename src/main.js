@@ -188,7 +188,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     // Excess above the average (multiplier - 1) is clamped to this before being
     // scaled by HIGHLIGHT_STRENGTH, so a few blown-out template pixels can't
     // produce absurdly large additive spikes.
-    const HIGHLIGHT_EXCESS_CAP = 1.0;
+    const HIGHLIGHT_EXCESS_CAP = 0.75;
 
     function loadTemplate() {
         return Promise.all([
