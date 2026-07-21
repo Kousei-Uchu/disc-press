@@ -629,9 +629,12 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         log(`Targeting Minecraft 26.2 — data pack format ${DATA_PACK_FORMAT.join(".")}, resource pack format ${RESOURCE_PACK_FORMAT.join(".")}.`);
 
         const zip = new JSZip();
-        const dp = zip.folder("datapack");
-        const rp = zip.folder("resourcepack");
-        const mod = zip.folder("fabric-mod");
+        const tldp = zip.folder("datapack");
+        const tlrp = zip.folder("resourcepack");
+        const tlmod = zip.folder("fabric-mod");
+        const dp = tldp.folder(packName);
+        const rp = tlrp.folder(packname);
+        const mod = tlmod.folder(packname);
         const geyser = zip.folder("geyser");
 
         // ---- pack.mcmeta ----
@@ -1049,12 +1052,12 @@ exactly the 26.2 formats above.
 
 Contents
 --------
-datapack/       - drop the CONTENTS of this folder into a world's
+datapack/       - drop the folder within this directory into a world's
                    .minecraft/saves/<world>/datapacks/${namespace}/ folder,
                    or zip it and use as a datapack. Includes jukebox songs,
                    give functions, the blank-disc trade-injection function,
                    and the stonecutting recipes/advancements.
-resourcepack/    - same idea, goes in .minecraft/resourcepacks/, or zip it.
+resourcepack/    - same idea, the folder within goes in .minecraft/resourcepacks/, or zip it.
 fabric-mod/      - full Gradle project source. Run the build yourself
                    (see fabric-mod/README.md) — nothing is precompiled.
 geyser/          - Geyser v2 custom item mappings plus a minimal Bedrock
@@ -1071,7 +1074,7 @@ SNBT syntax (custom_name={text:"..."}), not the pre-1.21.5 JSON-string style.
 
 Blank disc & the stonecutter
 ------------------------------
-Trade 16 emeralds + 1 amethyst shard with a level 5 (master) librarian for a
+Trade 16 emeralds + 4 amethyst shard with a level 5 (master) librarian for a
 blank disc. Vanilla has no data-pack registry for villager trades, so this is
 done with a function (data/${namespace}/function/add_blank_trade.mcfunction,
 hooked into the #minecraft:tick function tag) that finds level-5 librarians
