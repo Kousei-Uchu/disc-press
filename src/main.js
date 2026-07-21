@@ -640,14 +640,14 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         // to the exact 26.2 formats since that's the only version this pack targets.
         dp.file("pack.mcmeta", JSON.stringify({
             pack: {
-                description: packName + " (datapack)",
+                description: packName + " (Datapack)\nMade with Disc Press",
                 min_format: DATA_PACK_FORMAT,
                 max_format: DATA_PACK_FORMAT
             }
         }, null, 2));
         rp.file("pack.mcmeta", JSON.stringify({
             pack: {
-                description: packName + " (resource pack)",
+                description: packName + " (Resource Pack)\nMade with Disc Press",
                 min_format: RESOURCE_PACK_FORMAT,
                 max_format: RESOURCE_PACK_FORMAT
             }
@@ -798,11 +798,12 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
 
         const blankComponents = {
             item_model: `${namespace}:${blankId}`,
-            custom_name: { text: "Blank Disc" }
+            custom_name: { text: "Blank Disc" },
+            lore: [{text: "Used in a Stonecutter"}]
         };
 
         fnDir.file("give_blank_disc.mcfunction",
-            `give @s ${blankBaseItem}[item_model="${namespace}:${blankId}",custom_name={text:"Blank Disc"}]\n`
+            `give @s ${blankBaseItem}[item_model="${namespace}:${blankId}",custom_name={text:"Blank Disc"},lore=[{text:"Used in a Stonecutter"}]\n`
         );
 
         geyserItems.push({
@@ -823,9 +824,9 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
         // map) — different from the lowercase "count" used in the recipe JSON below.
         const tradeTag = `${namespace}_blank_trade_added`;
         const tradeOffer = {
-            buy: { id: "minecraft:emerald", Count: 16 },
-            buyB: { id: "minecraft:amethyst_shard", Count: 1 },
-            sell: { id: blankBaseItem, Count: 1, components: blankComponents },
+            buy: { id: "minecraft:emerald", count: 16 },
+            buyB: { id: "minecraft:amethyst_shard", count: 4 },
+            sell: { id: blankBaseItem, count: 1, components: blankComponents },
             maxUses: 12,
             uses: 0,
             xp: 5,
