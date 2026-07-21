@@ -914,7 +914,7 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
 
             soundsDir.file(id + ".ogg", oggBytes);
             modSoundsDir.file(id + ".ogg", oggBytes);
-            soundsJson[id] = { sounds: [`${namespace}:records/${id}`], subtitle: langKey };
+            soundsJson[id] = { sounds: [{"name": `${namespace}:records/${id}`, "stream": true}], subtitle: langKey };
             modSoundsJson[id] = { sounds: [`records/${id}`], subtitle: langKey };
 
             // give command — item components are parsed as SNBT, not JSON. custom_name
