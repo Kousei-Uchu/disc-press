@@ -769,25 +769,24 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
     function handleFileList(fileList) {
         const files = Array.from(fileList);
         if (!files.length) return;
-        files.forEach(f => addFile(f).catch(err => log("Failed to add " + f.name + ": " + err.message, "err")));
+
+        const zipFile = files.find(f => /\.zip$/i.test(f.name));
+        // A single selected/dropped .zip is treated as "load an existing pack
+        // to edit" rather than an audio file. Mixing a zip with audio files
+        // in one selection is ambiguous, so that case falls through to the
+        // audio path below and the zip is ignored.
+        if (zipFile && files.length === 1) {
+            importPack(zipFile).catch(err => log("Import failed: " + err.message, "err"));
+            return;
+        }
+
+        const audioFiles = files.filter(f => f.type.startsWith("audio") || /\.(mp3|wav|flac|m4a|aac|opus|ogg|wma|aiff)$/i.test(f.name));
+        audioFiles.forEach(f => addFile(f).catch(err => log("Failed to add " + f.name + ": " + err.message, "err")));
     }
     fileInput.addEventListener("change", (e) => { handleFileList(e.target.files); fileInput.value = ""; });
     ["dragenter", "dragover"].forEach(ev => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.add("drag"); }));
     ["dragleave", "drop"].forEach(ev => dz.addEventListener(ev, (e) => { e.preventDefault(); dz.classList.remove("drag"); }));
-    dz.addEventListener("drop", (e) => {
-        const dropped = [...e.dataTransfer.files];
-        const zipFile = dropped.find(f => /\.zip$/i.test(f.name));
-        // A single dropped .zip is treated as "load an existing pack to edit"
-        // rather than an audio file; mixing a zip with audio files in one
-        // drop is ambiguous, so that case falls through to the audio path
-        // and the zip is ignored.
-        if (zipFile && dropped.length === 1) {
-            importPack(zipFile).catch(err => log("Import failed: " + err.message, "err"));
-            return;
-        }
-        const audioFiles = dropped.filter(f => f.type.startsWith("audio") || /\.(mp3|wav|flac|m4a|aac|opus|ogg|wma|aiff)$/i.test(f.name));
-        handleFileList(audioFiles);
-    });
+    dz.addEventListener("drop", (e) => { handleFileList(e.dataTransfer.files); });
 
     /* ---------------- ffmpeg (audio -> ogg vorbis) ---------------- */
     let ffmpegInstance = null;
