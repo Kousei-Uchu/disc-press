@@ -371,6 +371,13 @@ import { toBlobURL, fetchFile } from "@ffmpeg/util";
             const src = track.canvas;
             if (!src) return;
             withShadow(() => {
+                // Disable smoothing to keep hard, pixelated edges when scaling up
+                ctx.imageSmoothingEnabled = false; 
+                
+                // For older browser compatibility, you can also include vendor prefixes:
+                ctx.webkitImageSmoothingEnabled = false;
+                ctx.mozImageSmoothingEnabled = false;
+                ctx.msImageSmoothingEnabled = false;
                 ctx.save();
                 ctx.translate(x, y);
                 ctx.rotate(rotationDeg * Math.PI / 180);
